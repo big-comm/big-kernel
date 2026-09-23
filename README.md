@@ -8,8 +8,9 @@
 built from the official [kernel.org](https://www.kernel.org) sources, keeps the
 configuration and hardware patches of the Manjaro kernel BigCommunity already
 ships, and adds what can only be gained at compile time: a desktop-oriented CPU
-scheduler, an adaptive I/O scheduler, a Clang/LLVM ThinLTO build, and
-BigCommunity's own fixes for Intel graphics.
+scheduler, a faster idle CPU selector, an adaptive I/O scheduler, a Clang/LLVM
+ThinLTO build ready for profile-guided optimisation, and BigCommunity's own
+fixes for Intel graphics.
 
 The goal is simple: a kernel that feels faster under load, whether you are
 gaming or not, on the hardware our users actually have.
@@ -43,9 +44,10 @@ gaming or not, on the hardware our users actually have.
 | **Base configuration** | the Manjaro kernel configuration used by BigCommunity |
 | **Hardware patches** | Manjaro's set: AMD GPU and display fixes, Realtek audio, Intel Wi-Fi, handhelds |
 | **BORE CPU scheduler** | [firelzrd/bore-scheduler](https://github.com/firelzrd/bore-scheduler), by Masahito Suzuki |
+| **POC idle CPU selector** | [firelzrd/poc-selector](https://github.com/firelzrd/poc-selector), by Masahito Suzuki |
 | **ADIOS I/O scheduler** | [firelzrd/adios](https://github.com/firelzrd/adios), by Masahito Suzuki |
 | **Intel Xe / i915 fixes** | BigCommunity, sent upstream and reviewed on the kernel mailing lists |
-| **Compiler** | Clang/LLVM with ThinLTO |
+| **Compiler** | Clang/LLVM with ThinLTO and AutoFDO support |
 
 ### BORE — responsiveness under load
 
@@ -55,6 +57,15 @@ interactive work — the game, the desktop, audio — over tasks that hold the C
 for long stretches, such as a compiler or a background download. The effect is
 most visible exactly when the machine is busy: fewer stutters, a desktop that
 keeps responding.
+
+### POC — finding a free CPU faster
+
+Every time a task wakes up — a game thread, an audio buffer, an input event —
+the scheduler has to find an idle CPU to run it on, and the kernel does that by
+scanning. The **P**iece-**O**f-**C**ake selector keeps a bitmap of idle CPUs and
+answers in constant time instead. It does not change which task runs or how
+fairly; it only shortens the path to getting it running, which matters most on
+machines with many cores and workloads with many threads.
 
 ### ADIOS — adaptive I/O latency
 
@@ -70,6 +81,20 @@ The whole kernel is compiled with Clang and linked with **ThinLTO** (link-time
 optimisation): the compiler sees across source files, inlines and removes code
 it could not otherwise touch. The build targets generic **x86-64**, so the same
 package runs on every 64-bit PC, not only on the machine that built it.
+
+It is also built with **AutoFDO** support (`CONFIG_AUTOFDO_CLANG`). AutoFDO
+recompiles the kernel from a profile of what it actually executes — collected
+with `perf` on real gaming and desktop workloads — so the hot paths are laid out
+and optimised for how the kernel is really used. The first profile is being
+collected; until it ships, the kernel runs as a regular ThinLTO build.
+
+The optimisation level stays at the kernel's default `-O2`. `-O3` was measured
+by Phoronix across 230 tests at a 1.3% overall gain, with no measurable benefit
+for gaming or desktop workloads, and it is the level upstream has declined to
+support because of the miscompilations it has caused
+([Phoronix](https://www.phoronix.com/review/linux-kernel-o3/9),
+[Linux 6.0](https://www.phoronix.com/news/Linux-6.0-Drops-O3-Kconfig)).
+Profile-guided optimisation is where the measurable gain is.
 
 ### Intel Xe fixes — for Arrow Lake and Meteor Lake
 
@@ -98,6 +123,8 @@ changes only this:
 | Compiler | GCC | **Clang/LLVM** |
 | Link-time optimisation | none | **ThinLTO** (`CONFIG_LTO_CLANG_THIN`) |
 | CPU scheduler | EEVDF | **EEVDF + BORE** (`CONFIG_SCHED_BORE`) |
+| Idle CPU selection | linear scan | **POC** (`CONFIG_SCHED_POC_SELECTOR`) |
+| Profile-guided optimisation | no | **ready** (`CONFIG_AUTOFDO_CLANG`) |
 | Default I/O scheduler | — | **ADIOS** (`CONFIG_MQ_IOSCHED_DEFAULT_ADIOS`) |
 | Intel Xe TLB workaround | no | **yes** (`Wa_22016122933`) |
 | Kernel name | `-MANJARO` | `-big` |
@@ -130,6 +157,7 @@ listed in the [PKGBUILD](linux-big/PKGBUILD).
 |---|---|
 | `0200-sched-bore` | BORE 6.8.0 |
 | `0201-block-adios` | ADIOS 3.3.0r2 |
+| `0202-sched-poc-selector` | POC 2.6.3 |
 
 **From the Manjaro kernel** — AMD GPU race fix and brightness curve check, USB
 VHCI suspend, Realtek audio, Intel Wi-Fi, unprivileged user namespaces sysctl,
@@ -158,12 +186,13 @@ at the next boot. Keep another kernel installed as a fallback.
 uname -r                                  # 7.2.x-N-big
 sudo dmesg | grep -i "BORE CPU Scheduler" # BORE is active
 sysctl kernel.sched_bore                  # 1 = enabled
+sysctl kernel.sched_poc_selector          # 1 = enabled
 cat /sys/block/*/queue/scheduler          # adios is listed, the active one in [brackets]
 zgrep LTO_CLANG_THIN /proc/config.gz      # CONFIG_LTO_CLANG_THIN=y
 ```
 
-BORE can be switched off at runtime, for comparison, with
-`sudo sysctl kernel.sched_bore=0`.
+BORE and POC can be switched off at runtime, for comparison, with
+`sudo sysctl kernel.sched_bore=0` and `sudo sysctl kernel.sched_poc_selector=0`.
 
 ---
 
@@ -219,12 +248,14 @@ big-kernel/
 
 ## Roadmap
 
-- [x] linux-big 7.2 — BORE, ADIOS, Clang ThinLTO, Intel Xe fixes
+- [x] linux-big 7.2 — BORE, ADIOS, POC, Clang ThinLTO, Intel Xe fixes
+- [x] Built ready for AutoFDO
 - [ ] Validation on Intel (Arrow Lake) and AMD (Zen 2) machines, and with NVIDIA DKMS
 - [ ] **linux-big-lts** — the 6.18 long-term series, as a conservative fallback
 - [ ] Kernel modules the BigCommunity ISO needs (`broadcom-wl`, `bbswitch`)
 - [ ] Selectable in the BigCommunity ISO builder
-- [ ] **AutoFDO + Propeller** — profile-guided optimisation from real gaming workloads
+- [ ] **AutoFDO profile** from real gaming and desktop workloads, shipped in the package
+- [ ] **Propeller** on top of AutoFDO
 - [ ] Published benchmarks: scheduler latency, frame times and build times, side by side with other kernels on the same hardware
 
 Claims about speed will be made here with numbers, once the benchmarks exist.
@@ -235,7 +266,7 @@ Claims about speed will be made here with numbers, once the benchmarks exist.
 
 - The Linux kernel and its patches are licensed under the
   [GPL-2.0](https://www.kernel.org/doc/html/latest/process/license-rules.html).
-- BORE and ADIOS are the work of Masahito Suzuki, GPL-2.0.
+- BORE, ADIOS and the POC selector are the work of Masahito Suzuki, GPL-2.0.
 - The hardware patches come from the Manjaro kernel team and their upstream
   authors, named in each patch.
 - The Intel Xe fixes are by Tales A. Mendonça, with review by Matthew Brost and

@@ -5,8 +5,9 @@
 # kernel.org sources, Manjaro's configuration and hardware patches, and on top:
 #   - the BORE scheduler (Masahito Suzuki, firelzrd/bore-scheduler)
 #   - the ADIOS I/O scheduler (Masahito Suzuki, firelzrd/adios)
+#   - the POC idle CPU selector (Masahito Suzuki, firelzrd/poc-selector)
 #   - BigCommunity's Intel Xe fixes, sent upstream
-#   - a Clang/LLVM build with ThinLTO
+#   - a Clang/LLVM build with ThinLTO, ready for AutoFDO
 #
 # Everything the kernel changes is listed in prepare(), where it is also
 # checked, so a new release that silently drops an option fails the build
@@ -19,7 +20,7 @@
 _basekernel=7.2
 pkgbase=linux-big
 pkgver=7.2.7
-pkgrel=1
+pkgrel=2
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
 license=(GPL-2.0-only)
@@ -99,6 +100,7 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         # Schedulers
         0200-sched-bore-6.8.0.patch
         0201-block-adios-3.3.0r2.patch
+        0202-sched-poc-selector-v2.6.3.patch
         # BigCommunity: Wa_22016122933 series, reviewed upstream (v6)
         0101-drm-xe-Capture-devcoredump-on-TLB-invalidation-timeo.patch
         0102-drm-xe-Log-when-a-timed-out-TLB-invalidation-ack-fin.patch
@@ -106,7 +108,7 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
 )
 sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
             '7d08d70146f0c81bfd529d97450044d356e774a93ae2ec041e7cd825f48b0695'
-            'e210cd82b59efd1096714f163c3d3c66d752e144d58134ea911183af0b5347d6'
+            '9b167034277170e1311a03884cd69fd94f09b116ce0f0f7451f3617be2e5fd7c'
             'e5e98d62b63704cecdf32dbe6a9bafea6e70b23fa8e01fe96ca220ac6036392e'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
             '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
@@ -146,6 +148,7 @@ sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
             'eb4be3acedd744b5c03522fc87af945fe4a3253a4b758f8e0ef715f7a48b1781'
             '432c4e2f750d09b255024d547bdf5b014862ab297083ea04c62869db90d920ee'
             '4f186fa06bfb0e0e08320cb53a38afebe6d9eaa5c820396015c59f993bf8e1b6'
+            '694934e1259e456715ee1358cd3fe934853a8818e9ea5fac2d5136aa6993b08f'
             '85689db7f888c5fba374b1fcc803e3e26ffc927fdef4d87a022ae9f275635449'
             '91bdd01e6a8ec2de0ca198c0a1916fb588e801abfb28cbdd7e745e7a5e2c9492'
             'afb9cee8496ce87587865c157dfc8966b387a62b611cf49a3b12b967410f2d05')
@@ -154,6 +157,12 @@ _srcdir="linux-${_basekernel}"
 
 # The whole kernel is built with Clang/LLVM; it is what ThinLTO needs.
 _llvm=(LLVM=1 LLVM_IAS=1)
+
+# AutoFDO profile for this kernel series, collected with perf on a running
+# linux-big (see the README). When set, the file must also be listed in
+# source; the kernel is then optimised with it. Without one the kernel is
+# still built with CONFIG_AUTOFDO_CLANG, ready to be profiled.
+_autofdo_profile=
 
 export KBUILD_BUILD_HOST=bigcommunity
 export KBUILD_BUILD_USER=$pkgbase
@@ -165,7 +174,9 @@ _required_options=(
   CONFIG_LOCALVERSION='"-big"'
   CONFIG_CC_IS_CLANG=y
   CONFIG_LTO_CLANG_THIN=y
+  CONFIG_AUTOFDO_CLANG=y
   CONFIG_SCHED_BORE=y
+  CONFIG_SCHED_POC_SELECTOR=y
   CONFIG_MQ_IOSCHED_ADIOS=y
   CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y
   CONFIG_HZ_1000=y
@@ -217,12 +228,17 @@ prepare() {
 
 build() {
   cd $_srcdir
-  make "${_llvm[@]}" ${MAKEFLAGS} bzImage modules
+  local autofdo=()
+  if [[ -n $_autofdo_profile ]]; then
+    msg "Optimising with the AutoFDO profile $_autofdo_profile"
+    autofdo=(CLANG_AUTOFDO_PROFILE="$srcdir/$_autofdo_profile")
+  fi
+  make "${_llvm[@]}" "${autofdo[@]}" ${MAKEFLAGS} bzImage modules
   make -C tools/bpf/bpftool "${_llvm[@]}" vmlinux.h feature-clang-bpf-co-re=1
 }
 
 _package() {
-  pkgdesc="The BigCommunity kernel and modules: BORE, ADIOS, Clang ThinLTO and Intel Xe fixes"
+  pkgdesc="The BigCommunity kernel and modules: BORE, ADIOS, POC, Clang ThinLTO and Intel Xe fixes"
   depends=(
     'coreutils'
     'initramfs'
@@ -283,7 +299,8 @@ _package-headers() {
     zlib
     zstd
   )
-  provides=('LINUX-HEADERS')
+  # linux-headers is what packages such as bigcam depend on by name.
+  provides=('LINUX-HEADERS' "linux-headers=$pkgver")
 
   cd $_srcdir
   local builddir="$pkgdir/usr/lib/modules/$(<version)/build"
