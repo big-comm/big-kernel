@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Talesam <talesam@localhost>
+Date: Wed, 1 Jul 2026 20:35:00 -0300
+Subject: [PATCH] drm/i915/vrr: Check TRANS_PUSH_SEND after DSB commit
+
+intel_vrr_check_push_sent() emits a DSB poll command when the
+corresponding pipe update is programmed through DSB. That makes the DSB
+engine poll the transient TRANS_PUSH_SEND bit as part of the batch.
+
+On an Arrow Lake-P system using xe this reports a DSB poll error during
+boot:
+
+  DSB 0 last poll: reg=0x00060a70 mask=0x40000000 val=0x00000000
+
+The register is TRANS_PUSH_A and the mask is TRANS_PUSH_SEND. The caller
+already queues a delayed-vblank wait before checking the bit, and DSB
+completion is waited for later in the commit tail.
+
+Keep the TRANS_PUSH programming in the DSB batch, but do not put the
+TRANS_PUSH_SEND completion poll in the DSB batch. Instead, perform the
+completion check through normal MMIO after DSB completion. This preserves
+DSB for the display update while avoiding a DSB poll error on the transient
+completion bit.
+
+Signed-off-by: Talesam <talesam@localhost>
+---
+ drivers/gpu/drm/i915/display/intel_color.c   |  1 -
+ drivers/gpu/drm/i915/display/intel_display.c |  7 ++-----
+ drivers/gpu/drm/i915/display/intel_vrr.c     | 28 ++++++++++------------------
+ drivers/gpu/drm/i915/display/intel_vrr.h     |  3 +--
+ 4 files changed, 13 insertions(+), 26 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/display/intel_color.c b/drivers/gpu/drm/i915/display/intel_color.c
+index 6d1cffc..b5b1b29 100644
+--- a/drivers/gpu/drm/i915/display/intel_color.c
++++ b/drivers/gpu/drm/i915/display/intel_color.c
+@@ -2027,7 +2027,6 @@ void intel_color_prepare_commit(struct intel_atomic_state *state,
+ 	if (crtc_state->use_dsb && intel_color_uses_chained_dsb(crtc_state)) {
+ 		intel_vrr_send_push(crtc_state->dsb_color, crtc_state);
+ 		intel_dsb_wait_for_delayed_vblank(state, crtc_state->dsb_color);
+-		intel_vrr_check_push_sent(crtc_state->dsb_color, crtc_state);
+ 		intel_dsb_interrupt(crtc_state->dsb_color);
+ 	}
+ 
+diff --git a/drivers/gpu/drm/i915/display/intel_display.c b/drivers/gpu/drm/i915/display/intel_display.c
+index ad2fe10..a9b3a1e 100644
+--- a/drivers/gpu/drm/i915/display/intel_display.c
++++ b/drivers/gpu/drm/i915/display/intel_display.c
+@@ -7420,8 +7420,6 @@ static void intel_atomic_dsb_finish(struct intel_atomic_state *state,
+ 			intel_dsb_wait_vblanks(new_crtc_state->dsb_commit, 1);
+ 
+ 		intel_dsb_wait_for_delayed_vblank(state, new_crtc_state->dsb_commit);
+-		intel_vrr_check_push_sent(new_crtc_state->dsb_commit,
+-					  new_crtc_state);
+ 
+ 		if (new_crtc_state->vrr.dc_balance.enable)
+ 			intel_pipedmc_dcb_enable(new_crtc_state->dsb_commit, crtc);
+@@ -7572,8 +7570,9 @@ static void intel_atomic_commit_tail(struct intel_atomic_state *state)
+ 
+ 		intel_atomic_dsb_wait_commit(new_crtc_state);
+ 
+-		if (!state->base.legacy_cursor_update && !new_crtc_state->use_dsb)
+-			intel_vrr_check_push_sent(NULL, new_crtc_state);
++		/* Keep transient TRANS_PUSH_SEND polling out of the DSB batch. */
++		if (!state->base.legacy_cursor_update)
++			intel_vrr_check_push_sent(new_crtc_state);
+ 
+ 		if (new_crtc_state->use_flipq)
+ 			intel_flipq_disable(new_crtc_state);
+diff --git a/drivers/gpu/drm/i915/display/intel_vrr.c b/drivers/gpu/drm/i915/display/intel_vrr.c
+index e03b5da..f84759d 100644
+--- a/drivers/gpu/drm/i915/display/intel_vrr.c
++++ b/drivers/gpu/drm/i915/display/intel_vrr.c
+@@ -31,6 +31,8 @@
+ #define DCB_CORRECTION_AGGRESSIVENESS	1000 /* ms × 100; 10 ms */
+ #define DCB_BLANK_TARGET		50
+ 
++#define VRR_TRANS_PUSH_SEND_TIMEOUT_US	1000
++
+ bool intel_vrr_is_capable(struct intel_connector *connector)
+ {
+ 	struct intel_display *display = to_intel_display(connector);
+@@ -731,8 +733,7 @@ void intel_vrr_send_push(struct intel_dsb *dsb,
+ 		intel_dsb_nonpost_end(dsb);
+ }
+ 
+-void intel_vrr_check_push_sent(struct intel_dsb *dsb,
+-			       const struct intel_crtc_state *crtc_state)
++void intel_vrr_check_push_sent(const struct intel_crtc_state *crtc_state)
+ {
+ 	struct intel_display *display = to_intel_display(crtc_state);
+ 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
+@@ -746,23 +747,12 @@ void intel_vrr_check_push_sent(struct intel_dsb *dsb,
+ 	 * already be the case as long as the caller makes sure
+ 	 * this is called after the delayed vblank has occurred.
+ 	 */
+-	if (dsb) {
+-		int wait_us, count;
+-
+-		wait_us = 2;
+-		count = 1;
+-
+-		/*
+-		 * If the bit hasn't cleared the DSB will
+-		 * raise the poll error interrupt.
+-		 */
+-		intel_dsb_poll(dsb, TRANS_PUSH(display, cpu_transcoder),
+-			       TRANS_PUSH_SEND, 0, wait_us, count);
+-	} else {
+-		if (intel_vrr_is_push_sent(crtc_state))
+-			drm_err(display->drm, "[CRTC:%d:%s] VRR push send still pending\n",
+-				crtc->base.base.id, crtc->base.name);
+-	}
++	if (intel_de_wait_for_clear_us(display,
++				       TRANS_PUSH(display, cpu_transcoder),
++				       TRANS_PUSH_SEND,
++				       VRR_TRANS_PUSH_SEND_TIMEOUT_US))
++		drm_err(display->drm, "[CRTC:%d:%s] VRR push send still pending\n",
++			crtc->base.base.id, crtc->base.name);
+ }
+ 
+ bool intel_vrr_is_push_sent(const struct intel_crtc_state *crtc_state)
+diff --git a/drivers/gpu/drm/i915/display/intel_vrr.h b/drivers/gpu/drm/i915/display/intel_vrr.h
+index 4f16ca4..2a03636 100644
+--- a/drivers/gpu/drm/i915/display/intel_vrr.h
++++ b/drivers/gpu/drm/i915/display/intel_vrr.h
+@@ -27,8 +27,7 @@ void intel_vrr_set_transcoder_timings(const struct intel_crtc_state *crtc_state)
+ void intel_vrr_enable(const struct intel_crtc_state *crtc_state);
+ void intel_vrr_send_push(struct intel_dsb *dsb,
+ 			 const struct intel_crtc_state *crtc_state);
+-void intel_vrr_check_push_sent(struct intel_dsb *dsb,
+-			       const struct intel_crtc_state *crtc_state);
++void intel_vrr_check_push_sent(const struct intel_crtc_state *crtc_state);
+ void intel_vrr_dcb_increment_flip_count(struct intel_crtc_state *crtc_state,
+ 					struct intel_crtc *crtc);
+ bool intel_vrr_is_push_sent(const struct intel_crtc_state *crtc_state);
+-- 
+2.54.0
