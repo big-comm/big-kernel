@@ -1,0 +1,101 @@
+# Maintainer: Tales A. Mendonça <talesam@gmail.com>
+#
+# Realtek RTL8723BU USB Wi-Fi kernel module for linux-big.
+#
+# Nothing here is edited by hand when a driver or the kernel is updated:
+#   - the module source is rtl8723bu at a pinned commit, pinned below;
+#   - the kernel is the linux-big described by ../linux-big/PKGBUILD, which
+#     sets the exact dependency and the pkgrel.
+# The dependency on the exact kernel is deliberate: when a new linux-big is
+# published before its modules, pacman holds the kernel update back instead
+# of booting a kernel without Wi-Fi.
+#
+# Do not reference the pkgname or url variables anywhere in this file: a
+# testing build in the CI expands them textually.
+
+_kernel_pkgbuild=../linux-big/PKGBUILD
+_kpkgver=$(sed -n 's/^pkgver=//p' "$_kernel_pkgbuild")
+_kpkgrel=$(sed -n 's/^pkgrel=//p' "$_kernel_pkgbuild")
+_kernel="${_kpkgver}-${_kpkgrel}"
+_kernver="${_kernel}-big"
+
+# pkgrel encodes the kernel, so every new linux-big is an upgrade of this
+# package too: 7.2.7-2 -> 7020702, 7.3.0-1 -> 7030001.
+_kernel_rel() {
+  local major minor patch
+  IFS=. read -r major minor patch <<< "$_kpkgver"
+  printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
+}
+
+# A change here that must reach users on the same kernel and driver (a fixed
+# dependency, say) needs a new version: pacman does not reinstall an equal
+# one, and the repository's CDN keeps serving the old file under the old
+# name. Set _rebuild_for to the kernel it is for (_kernel, above) and
+# _rebuild to 1, 2...: pkgrel becomes 7020702.1. A new kernel ignores both,
+# so they never need resetting.
+_rebuild_for=
+_rebuild=
+_pkgrel() {
+  if [[ -n $_rebuild && $_rebuild_for == "$_kernel" ]]; then
+    echo "$(_kernel_rel).$_rebuild"
+  else
+    _kernel_rel
+  fi
+}
+
+
+_check_kernel() {
+  local headers
+  headers="$(</usr/src/linux-big/version)"
+  if [[ $headers != "$_kernver" ]]; then
+    error "linux-big-headers is $headers, but ../linux-big/PKGBUILD describes $_kernver"
+    return 1
+  fi
+}
+
+pkgname=linux-big-rtl8723bu
+# The date of the pinned commit, as Manjaro names it.
+pkgver=20260507
+pkgrel=$(_pkgrel)
+pkgdesc="Driver for RTL8723BU, for linux-big"
+arch=('x86_64')
+url="https://github.com/dini/rtl8723bu"
+license=('GPL')
+groups=('linux-big-extramodules')
+depends=("linux-big=$_kernel")
+makedepends=('git' "linux-big-headers=$_kernel")
+provides=('rtl8723bu')
+options=('!strip' '!debug')
+_commit=447ea628fce35aebc5cb857a788be042479284ff  # master
+source=("git+https://github.com/dini/rtl8723bu.git#commit=${_commit}"
+        'blacklist-rtl8xxxu.conf'
+        'cf783b1.patch')
+sha256sums=('73149a69f2f5c3136b530f325834efc2d6c2bd3d73ad3c8a199d8e8a1753bdcc'
+            '7c726ad04083c8e620bc11c837e5f51d3e9e2a5c3e19c333b2968eb39f1ef07e'
+            'b39cb5764297eff090f300eb2fb6471bfc2fe274bd99eba3b3bfb7bd35cad45b')
+
+prepare() {
+  cd rtl8723bu
+  patch -p1 -i ../cf783b1.patch
+  sed -i 's/strncpy/strscpy/g' os_dep/os_intfs.c
+  sed -i 's/strncpy/strscpy/g' os_dep/ioctl_linux.c
+  sed -i 's/strncpy/strscpy/g' os_dep/ioctl_cfg80211.c
+  sed -i 's/strncpy/strscpy/g' os_dep/linux/ioctl_cfg80211.c
+  sed -i 's/strncpy/strscpy/g' hal/hal_com.c
+  sed -i 's/strncpy/strscpy/g' hal/hal_com_phycfg.c
+  sed -i 's/ccflags-y += -DCONFIG_CONCURRENT_MODE/#ccflags-y += -DCONFIG_CONCURRENT_MODE/g' Makefile
+}
+
+build() {
+  _check_kernel
+  cd rtl8723bu
+  export USER_EXTRA_CFLAGS=" -Wno-incompatible-pointer-types"
+  make clean
+  make -C "/usr/lib/modules/$_kernver/build" M="$srcdir/rtl8723bu" modules
+}
+
+package() {
+  install -Dm644 blacklist-rtl8xxxu.conf "$pkgdir/usr/lib/modprobe.d/linux-big-blacklist-rtl8xxxu.conf"
+  install -Dm644 rtl8723bu/*.ko -t "$pkgdir/usr/lib/modules/$_kernver/extramodules/"
+  find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +
+}

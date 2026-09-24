@@ -1,0 +1,88 @@
+# Maintainer: Tales A. Mendonça <talesam@gmail.com>
+#
+# ThinkPad SMAPI (battery and sensors) kernel modules for linux-big.
+#
+# Nothing here is edited by hand when a driver or the kernel is updated:
+#   - the module source is tp_smapi 0.45, pinned by commit, pinned below;
+#   - the kernel is the linux-big described by ../linux-big/PKGBUILD, which
+#     sets the exact dependency and the pkgrel.
+# The dependency on the exact kernel is deliberate: when a new linux-big is
+# published before its modules, pacman holds the kernel update back instead
+# of booting a kernel without the module.
+#
+# Do not reference the pkgname or url variables anywhere in this file: a
+# testing build in the CI expands them textually.
+
+_kernel_pkgbuild=../linux-big/PKGBUILD
+_kpkgver=$(sed -n 's/^pkgver=//p' "$_kernel_pkgbuild")
+_kpkgrel=$(sed -n 's/^pkgrel=//p' "$_kernel_pkgbuild")
+_kernel="${_kpkgver}-${_kpkgrel}"
+_kernver="${_kernel}-big"
+
+# pkgrel encodes the kernel, so every new linux-big is an upgrade of this
+# package too: 7.2.7-2 -> 7020702, 7.3.0-1 -> 7030001.
+_kernel_rel() {
+  local major minor patch
+  IFS=. read -r major minor patch <<< "$_kpkgver"
+  printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
+}
+
+# A change here that must reach users on the same kernel and driver (a fixed
+# dependency, say) needs a new version: pacman does not reinstall an equal
+# one, and the repository's CDN keeps serving the old file under the old
+# name. Set _rebuild_for to the kernel it is for (_kernel, above) and
+# _rebuild to 1, 2...: pkgrel becomes 7020702.1. A new kernel ignores both,
+# so they never need resetting.
+_rebuild_for=
+_rebuild=
+_pkgrel() {
+  if [[ -n $_rebuild && $_rebuild_for == "$_kernel" ]]; then
+    echo "$(_kernel_rel).$_rebuild"
+  else
+    _kernel_rel
+  fi
+}
+
+
+_check_kernel() {
+  local headers
+  headers="$(</usr/src/linux-big/version)"
+  if [[ $headers != "$_kernver" ]]; then
+    error "linux-big-headers is $headers, but ../linux-big/PKGBUILD describes $_kernver"
+    return 1
+  fi
+}
+
+pkgname=linux-big-tp_smapi
+pkgver=0.45
+pkgrel=$(_pkgrel)
+pkgdesc="Modules for ThinkPad's SMAPI functionality, for linux-big"
+arch=('x86_64')
+url="https://github.com/evgeni/tp_smapi"
+license=('GPL-2.0-only')
+groups=('linux-big-extramodules')
+depends=("linux-big=$_kernel")
+makedepends=('git' "linux-big-headers=$_kernel")
+provides=('tp_smapi')
+options=('!strip' '!debug')
+_commit=2ed5e3b8ae4103e3fbc196fba7c96eba773dd7e1  # tags/tp-smapi/0.45^0
+source=("git+https://github.com/evgeni/tp_smapi#commit=$_commit")
+sha256sums=('32d5aa976884822905390c57548307810a23963cd39f5bfb69e127f81449c6f5')
+
+prepare() {
+  cd tp_smapi
+  git cherry-pick --mainline 1 --no-commit 0483993a64f6d922d71dddd8f7f353d8bc22d1bf
+}
+
+build() {
+  _check_kernel
+  cd tp_smapi
+  make HDAPS=1 KVER="$_kernver" EXTRA_CFLAGS=
+}
+
+package() {
+  find . -name '*.ko' -exec install -Dt "$pkgdir/usr/lib/modules/$_kernver/extramodules" {} +
+  find "$pkgdir" -name '*.ko' -exec strip --strip-debug {} +
+  find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +
+  echo tp_smapi | install -Dm644 /dev/stdin "$pkgdir/usr/lib/modules-load.d/linux-big-tp_smapi.conf"
+}

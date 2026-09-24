@@ -1,0 +1,89 @@
+# Maintainer: Tales A. Mendonça <talesam@gmail.com>
+#
+# ZFS kernel modules for linux-big, built from zfs-dkms.
+#
+# Nothing here is edited by hand when a driver or the kernel is updated:
+#   - the module version is the zfs-dkms currently in the repositories the
+#     build runs against, asked from pacman;
+#   - the kernel is the linux-big described by ../linux-big/PKGBUILD, which
+#     sets the exact dependency and the pkgrel.
+# The dependency on the exact kernel is deliberate: when a new linux-big is
+# published before its modules, pacman holds the kernel update back instead
+# of booting a kernel without ZFS.
+#
+# Do not reference the pkgname or url variables anywhere in this file: a
+# testing build in the CI expands them textually.
+
+_kernel_pkgbuild=../linux-big/PKGBUILD
+_kpkgver=$(sed -n 's/^pkgver=//p' "$_kernel_pkgbuild")
+_kpkgrel=$(sed -n 's/^pkgrel=//p' "$_kernel_pkgbuild")
+_kernel="${_kpkgver}-${_kpkgrel}"
+_kernver="${_kernel}-big"
+
+# pkgrel encodes the kernel, so every new linux-big is an upgrade of this
+# package too: 7.2.7-2 -> 7020702, 7.3.0-1 -> 7030001.
+_kernel_rel() {
+  local major minor patch
+  IFS=. read -r major minor patch <<< "$_kpkgver"
+  printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
+}
+
+# A change here that must reach users on the same kernel and driver (a fixed
+# dependency, say) needs a new version: pacman does not reinstall an equal
+# one, and the repository's CDN keeps serving the old file under the old
+# name. Set _rebuild_for to the kernel it is for (_kernel, above) and
+# _rebuild to 1, 2...: pkgrel becomes 7020702.1. A new kernel ignores both,
+# so they never need resetting.
+_rebuild_for=7.2.7-2
+_rebuild=1
+_pkgrel() {
+  if [[ -n $_rebuild && $_rebuild_for == "$_kernel" ]]; then
+    echo "$(_kernel_rel).$_rebuild"
+  else
+    _kernel_rel
+  fi
+}
+
+# The version of a package in the repositories, without its pkgrel.
+_repo_version() {
+  LC_ALL=C pacman -Si "$1" 2>/dev/null | awk -F': ' '/^Version/ { sub(/-[^-]*$/, "", $2); print $2; exit }'
+}
+
+_check_kernel() {
+  local headers
+  headers="$(</usr/src/linux-big/version)"
+  if [[ $headers != "$_kernver" ]]; then
+    error "linux-big-headers is $headers, but ../linux-big/PKGBUILD describes $_kernver"
+    return 1
+  fi
+}
+
+pkgname=linux-big-zfs
+pkgver=$(_repo_version zfs-dkms)
+pkgrel=$(_pkgrel)
+pkgdesc="Kernel modules for the Zettabyte File System, for linux-big"
+arch=('x86_64')
+url="https://zfsonlinux.org/"
+license=('CDDL-1.0')
+groups=('linux-big-extramodules')
+# libunwind: Manjaro's zfs-utils 2.4.4-1 links libzfs, libzfs_core and
+# libnvpair against libunwind.so.8 without depending on it. Without it zfs,
+# zpool and mount.zfs do not run, and an initramfs for a ZFS root gets a
+# mount.zfs that cannot mount it. Drop once zfs-utils declares it.
+depends=("linux-big=$_kernel" "zfs-utils=$pkgver" libunwind)
+makedepends=("linux-big-headers=$_kernel" "zfs-dkms=$pkgver")
+provides=("zfs=$pkgver" "ZFS-MODULE=$pkgver")
+options=('!strip' '!debug')
+
+build() {
+  _check_kernel
+  fakeroot dkms build --dkmstree "$srcdir" -m "zfs/$pkgver" -k "$_kernver"
+}
+
+package() {
+  install -Dt "$pkgdir/usr/lib/modules/$_kernver/extramodules" -m644 \
+    "zfs/$pkgver/$_kernver/$CARCH/module/"*
+  find "$pkgdir" -name '*.ko' -exec xz -T1 {} +
+  printf '%s\n' spl zfs |
+    install -Dm644 /dev/stdin "$pkgdir/usr/lib/modules-load.d/linux-big-zfs.conf"
+}
