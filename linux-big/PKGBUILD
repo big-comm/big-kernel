@@ -257,8 +257,11 @@ check() {
   rm -rf "$srcdir/nvidia-gate"
   cp -a "$nvidia" "$srcdir/nvidia-gate"
   cd "$srcdir/nvidia-gate"
-  # The toolchain dkms uses for a Clang-built kernel.
-  CC=clang LD=ld.lld make "${_llvm[@]}" ${MAKEFLAGS} IGNORE_PREEMPT_RT_PRESENCE=1 \
+  # The toolchain dkms uses for a Clang-built kernel. makepkg exports its own
+  # CFLAGS and LDFLAGS, which the NVIDIA build hands to ld.lld as is, and
+  # ld.lld rejects the compiler-driver ones (-Wl,-O1, ...): clear them.
+  CFLAGS= CXXFLAGS= LDFLAGS= CC=clang LD=ld.lld \
+    make "${_llvm[@]}" ${MAKEFLAGS} IGNORE_PREEMPT_RT_PRESENCE=1 \
     SYSSRC="$srcdir/$_srcdir" SYSOUT="$srcdir/$_srcdir" modules
 
   local module
