@@ -27,6 +27,22 @@ _kernel_rel() {
   printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
 }
 
+# A change here that must reach users on the same kernel and driver (a fixed
+# dependency, say) needs a new version: pacman does not reinstall an equal
+# one, and the repository's CDN keeps serving the old file under the old
+# name. Set _rebuild_for to the kernel it is for (_kernel, above) and
+# _rebuild to 1, 2...: pkgrel becomes 7020702.1. A new kernel ignores both,
+# so they never need resetting.
+_rebuild_for=
+_rebuild=
+_pkgrel() {
+  if [[ -n $_rebuild && $_rebuild_for == "$_kernel" ]]; then
+    echo "$(_kernel_rel).$_rebuild"
+  else
+    _kernel_rel
+  fi
+}
+
 
 _check_kernel() {
   local headers
@@ -40,7 +56,7 @@ _check_kernel() {
 pkgname=linux-big-rtl8723bu
 # The date of the pinned commit, as Manjaro names it.
 pkgver=20260507
-pkgrel=$(_kernel_rel)
+pkgrel=$(_pkgrel)
 pkgdesc="Driver for RTL8723BU, for linux-big"
 arch=('x86_64')
 url="https://github.com/dini/rtl8723bu"

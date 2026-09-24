@@ -125,6 +125,23 @@ def pkgbuild_value(path, key):
     return match.group(1).strip("'\"")
 
 
+def rebuild_suffix(path, kernel):
+    """".N" when the module PKGBUILD sets _rebuild=N for this kernel, else "".
+
+    Mirrors _pkgrel() in the module PKGBUILDs: a rebuild for the same kernel
+    and driver gets a new version, and a new kernel drops it by itself.
+    """
+    with open(path, encoding="utf-8") as pkgbuild:
+        text = pkgbuild.read()
+    values = {}
+    for key in ("_rebuild_for", "_rebuild"):
+        match = re.search(rf"^{key}=(\S*)\s*$", text, re.MULTILINE)
+        values[key] = match.group(1).strip("'\"") if match else ""
+    if values["_rebuild"] and values["_rebuild_for"] == kernel:
+        return f".{values['_rebuild']}"
+    return ""
+
+
 def kernel_rel(pkgver, pkgrel):
     """The pkgrel the modules derive from the kernel: 7.2.7-2 -> 7020702."""
     major, minor, *rest = pkgver.split(".")
@@ -170,7 +187,8 @@ def plan(root, fetch_database):
                     log(f"[{branch}] {module}: {source} is in none of the {branch} repositories, skipped")
                     continue
                 driver = without_pkgrel(found)
-            expected = f"{driver}-{rel}"
+            suffix = rebuild_suffix(os.path.join(root, module, "PKGBUILD"), kernel)
+            expected = f"{driver}-{rel}{suffix}"
             current = ours.get(module)
             if current == expected:
                 log(f"[{branch}] {module} {expected}: up to date")

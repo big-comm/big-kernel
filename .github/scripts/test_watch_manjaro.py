@@ -34,14 +34,18 @@ MANJARO = {
 }
 
 
+def suffix(module):
+    return watch.rebuild_suffix(os.path.join(ROOT, module, "PKGBUILD"), KERNEL)
+
+
 def up_to_date(manjaro):
     """What BigCommunity has published when every module matches."""
     ours = {"linux-big": KERNEL}
     for module, source in watch.MODULES.items():
         if source:
-            ours[module] = f"{watch.without_pkgrel(manjaro[source])}-{REL}"
+            ours[module] = f"{watch.without_pkgrel(manjaro[source])}-{REL}{suffix(module)}"
         else:
-            ours[module] = f"{watch.pkgbuild_value(os.path.join(ROOT, module, 'PKGBUILD'), 'pkgver')}-{REL}"
+            ours[module] = f"{watch.pkgbuild_value(os.path.join(ROOT, module, 'PKGBUILD'), 'pkgver')}-{REL}{suffix(module)}"
     return ours
 
 
@@ -136,6 +140,47 @@ class Plan(unittest.TestCase):
         partial = {k: v for k, v in MANJARO.items() if k != "nvidia-580xx-dkms"}
         builds = watch.plan(ROOT, databases({"linux-big": KERNEL}, {}, stable_manjaro=partial))
         self.assertNotIn("linux-big-nvidia-580xx", modules(builds))
+
+
+class Rebuild(unittest.TestCase):
+    """_rebuild in a module PKGBUILD, as _pkgrel() there reads it."""
+
+    def pkgbuild(self, rebuild_for, rebuild):
+        import tempfile
+        handle = tempfile.NamedTemporaryFile("w", suffix="PKGBUILD", delete=False)
+        handle.write(f"_rebuild_for={rebuild_for}\n_rebuild={rebuild}\npkgrel=$(_pkgrel)\n")
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def test_a_rebuild_for_this_kernel_adds_a_suffix(self):
+        self.assertEqual(watch.rebuild_suffix(self.pkgbuild("7.2.7-2", "1"), "7.2.7-2"), ".1")
+
+    def test_a_new_kernel_drops_it(self):
+        self.assertEqual(watch.rebuild_suffix(self.pkgbuild("7.2.7-2", "1"), "7.2.8-1"), "")
+
+    def test_no_rebuild_no_suffix(self):
+        self.assertEqual(watch.rebuild_suffix(self.pkgbuild("", ""), "7.2.7-2"), "")
+
+    def test_the_old_build_is_rebuilt_and_the_rebuild_is_kept(self):
+        module = "linux-big-zfs"
+        if not suffix(module):
+            self.skipTest("no rebuild pending in linux-big-zfs")
+        published = up_to_date(MANJARO)
+        published[module] = published[module].rsplit(".", 1)[0]
+        builds = watch.plan(ROOT, databases(published, {}))
+        self.assertEqual([(m, e) for _b, _mb, m, e in builds], [(module, f"2.4.4-{REL}{suffix(module)}")])
+        self.assertEqual(watch.plan(ROOT, databases(up_to_date(MANJARO), {})), [])
+
+    def test_the_suffixed_version_is_an_upgrade_until_the_next_kernel(self):
+        import subprocess
+        def vercmp(a, b):
+            return int(subprocess.run(["vercmp", a, b], capture_output=True, text=True).stdout)
+        try:
+            self.assertEqual(vercmp("2.4.4-7020702.1", "2.4.4-7020702"), 1)
+            self.assertEqual(vercmp("2.4.4-7020801", "2.4.4-7020702.1"), 1)
+        except FileNotFoundError:
+            self.skipTest("vercmp (pacman) not installed")
 
 
 class Rel(unittest.TestCase):

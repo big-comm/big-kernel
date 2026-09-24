@@ -28,6 +28,22 @@ _kernel_rel() {
   printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
 }
 
+# A change here that must reach users on the same kernel and driver (a fixed
+# dependency, say) needs a new version: pacman does not reinstall an equal
+# one, and the repository's CDN keeps serving the old file under the old
+# name. Set _rebuild_for to the kernel it is for (_kernel, above) and
+# _rebuild to 1, 2...: pkgrel becomes 7020702.1. A new kernel ignores both,
+# so they never need resetting.
+_rebuild_for=
+_rebuild=
+_pkgrel() {
+  if [[ -n $_rebuild && $_rebuild_for == "$_kernel" ]]; then
+    echo "$(_kernel_rel).$_rebuild"
+  else
+    _kernel_rel
+  fi
+}
+
 # The version of a package in the repositories, without its pkgrel.
 _repo_version() {
   LC_ALL=C pacman -Si "$1" 2>/dev/null | awk -F': ' '/^Version/ { sub(/-[^-]*$/, "", $2); print $2; exit }'
@@ -44,7 +60,7 @@ _check_kernel() {
 
 pkgname=linux-big-nvidia-open
 pkgver=$(_repo_version nvidia-open-dkms)
-pkgrel=$(_kernel_rel)
+pkgrel=$(_pkgrel)
 pkgdesc="NVIDIA open kernel modules for linux-big (Turing and newer)"
 arch=('x86_64')
 url="https://www.nvidia.com/"

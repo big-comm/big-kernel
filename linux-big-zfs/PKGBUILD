@@ -28,6 +28,22 @@ _kernel_rel() {
   printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
 }
 
+# A change here that must reach users on the same kernel and driver (a fixed
+# dependency, say) needs a new version: pacman does not reinstall an equal
+# one, and the repository's CDN keeps serving the old file under the old
+# name. Set _rebuild_for to the kernel it is for (_kernel, above) and
+# _rebuild to 1, 2...: pkgrel becomes 7020702.1. A new kernel ignores both,
+# so they never need resetting.
+_rebuild_for=7.2.7-2
+_rebuild=1
+_pkgrel() {
+  if [[ -n $_rebuild && $_rebuild_for == "$_kernel" ]]; then
+    echo "$(_kernel_rel).$_rebuild"
+  else
+    _kernel_rel
+  fi
+}
+
 # The version of a package in the repositories, without its pkgrel.
 _repo_version() {
   LC_ALL=C pacman -Si "$1" 2>/dev/null | awk -F': ' '/^Version/ { sub(/-[^-]*$/, "", $2); print $2; exit }'
@@ -44,13 +60,17 @@ _check_kernel() {
 
 pkgname=linux-big-zfs
 pkgver=$(_repo_version zfs-dkms)
-pkgrel=$(_kernel_rel)
+pkgrel=$(_pkgrel)
 pkgdesc="Kernel modules for the Zettabyte File System, for linux-big"
 arch=('x86_64')
 url="https://zfsonlinux.org/"
 license=('CDDL-1.0')
 groups=('linux-big-extramodules')
-depends=("linux-big=$_kernel" "zfs-utils=$pkgver")
+# libunwind: Manjaro's zfs-utils 2.4.4-1 links libzfs, libzfs_core and
+# libnvpair against libunwind.so.8 without depending on it. Without it zfs,
+# zpool and mount.zfs do not run, and an initramfs for a ZFS root gets a
+# mount.zfs that cannot mount it. Drop once zfs-utils declares it.
+depends=("linux-big=$_kernel" "zfs-utils=$pkgver" libunwind)
 makedepends=("linux-big-headers=$_kernel" "zfs-dkms=$pkgver")
 provides=("zfs=$pkgver" "ZFS-MODULE=$pkgver")
 options=('!strip' '!debug')
