@@ -18,7 +18,6 @@ KERNEL = "{}-{}".format(
     watch.pkgbuild_value(os.path.join(ROOT, "linux-big", "PKGBUILD"), "pkgrel"),
 )
 REL = watch.kernel_rel(*KERNEL.split("-"))
-BBSWITCH = watch.pkgbuild_value(os.path.join(ROOT, "linux-big-bbswitch", "PKGBUILD"), "pkgver")
 
 MANJARO = {
     "nvidia-open-dkms": "610.57.04-1",
@@ -26,15 +25,23 @@ MANJARO = {
     "nvidia-580xx-open-dkms": "580.178.04-1",
     "nvidia-580xx-dkms": "580.178.04-1",
     "broadcom-wl-dkms": "6.30.223.271-49.0",
+    "nvidia-470xx-dkms": "470.256.02-21",
+    "nvidia-390xx-dkms": "390.157-33",
+    "virtualbox-host-dkms": "7.2.16-1",
+    "zfs-dkms": "2.4.4-1",
+    "vhba-module-dkms": "20260313-1",
+    "acpi_call-dkms": "1.2.2-3.0",
 }
 
 
 def up_to_date(manjaro):
     """What BigCommunity has published when every module matches."""
-    ours = {"linux-big": KERNEL, "linux-big-bbswitch": f"{BBSWITCH}-{REL}"}
+    ours = {"linux-big": KERNEL}
     for module, source in watch.MODULES.items():
         if source:
             ours[module] = f"{watch.without_pkgrel(manjaro[source])}-{REL}"
+        else:
+            ours[module] = f"{watch.pkgbuild_value(os.path.join(ROOT, module, 'PKGBUILD'), 'pkgver')}-{REL}"
     return ours
 
 
@@ -120,6 +127,10 @@ class Plan(unittest.TestCase):
             ROOT, databases(up_to_date(MANJARO), {}, stable={"nvidia-open-dkms": "999.0-1"})
         )
         self.assertEqual(builds, [])
+
+    def test_every_module_directory_is_watched(self):
+        directories = {d for d in os.listdir(ROOT) if d.startswith("linux-big-") and os.path.isfile(os.path.join(ROOT, d, "PKGBUILD"))}
+        self.assertEqual(directories, set(watch.MODULES))
 
     def test_a_driver_missing_from_manjaro_is_skipped_not_fatal(self):
         partial = {k: v for k, v in MANJARO.items() if k != "nvidia-580xx-dkms"}

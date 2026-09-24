@@ -204,11 +204,23 @@ the same way (`<kernel>-nvidia-open` and so on):
 
 | Package | For |
 |---|---|
-| `linux-big-nvidia-open` | NVIDIA, Turing (RTX 20) and newer, open modules |
+| `linux-big-nvidia-open` | NVIDIA, Turing (GTX 16xx, RTX 20) and newer, open modules |
 | `linux-big-nvidia` | NVIDIA, Turing and newer, proprietary modules |
-| `linux-big-nvidia-580xx-open`, `linux-big-nvidia-580xx` | NVIDIA 580xx, for older cards |
+| `linux-big-nvidia-580xx-open`, `linux-big-nvidia-580xx` | NVIDIA 580xx: Maxwell, Pascal and Volta (GTX 750, 900, 10xx) |
+| `linux-big-nvidia-470xx` | NVIDIA 470xx: Kepler (GTX 600, 700) |
+| `linux-big-nvidia-390xx` | NVIDIA 390xx: Fermi (GTX 400, 500) |
+| `linux-big-virtualbox-host-modules` | running VirtualBox virtual machines |
+| `linux-big-zfs` | the ZFS file system |
+| `linux-big-vhba-module` | virtual CD/DVD drives (CDEmu) |
 | `linux-big-broadcom-wl` | Broadcom BCM43xx Wi-Fi |
+| `linux-big-r8168` | Realtek RTL8168 Ethernet |
+| `linux-big-rtl8723bu` | Realtek RTL8723BU USB Wi-Fi |
 | `linux-big-bbswitch` | switching off the discrete GPU of Optimus laptops |
+| `linux-big-acpi_call` | ACPI calls for power and battery tools (TLP) |
+| `linux-big-tp_smapi` | battery and sensors on older ThinkPads |
+
+This is the same set Manjaro builds for each of its kernels, so switching to
+linux-big keeps whatever of it a machine uses.
 
 They are built with dkms from the driver packages in Manjaro's repositories —
 no driver code lives here — and each one depends on one exact linux-big and
@@ -338,7 +350,7 @@ big-kernel/
 - [x] Built ready for AutoFDO
 - [ ] Validation on Intel (Arrow Lake) and AMD (Zen 2) machines, and with NVIDIA DKMS
 - [ ] **linux-big-lts** — the 6.18 long-term series, as a conservative fallback
-- [x] NVIDIA, `broadcom-wl` and `bbswitch` modules, kept in step automatically
+- [x] The 15 kernel modules Manjaro builds for its kernels, kept in step automatically
 - [ ] Selectable in the BigCommunity ISO builder
 - [ ] **AutoFDO profile** from real gaming and desktop workloads, shipped in the package
 - [ ] **Propeller** on top of AutoFDO

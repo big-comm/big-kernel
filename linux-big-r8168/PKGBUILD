@@ -1,0 +1,75 @@
+# Maintainer: Tales A. Mendonça <talesam@gmail.com>
+#
+# Realtek RTL8168 network card kernel module for linux-big.
+#
+# Nothing here is edited by hand when a driver or the kernel is updated:
+#   - the module source is r8168 8.056.02, pinned below;
+#   - the kernel is the linux-big described by ../linux-big/PKGBUILD, which
+#     sets the exact dependency and the pkgrel.
+# The dependency on the exact kernel is deliberate: when a new linux-big is
+# published before its modules, pacman holds the kernel update back instead
+# of booting a kernel without its network driver.
+#
+# Do not reference the pkgname or url variables anywhere in this file: a
+# testing build in the CI expands them textually.
+
+_kernel_pkgbuild=../linux-big/PKGBUILD
+_kpkgver=$(sed -n 's/^pkgver=//p' "$_kernel_pkgbuild")
+_kpkgrel=$(sed -n 's/^pkgrel=//p' "$_kernel_pkgbuild")
+_kernel="${_kpkgver}-${_kpkgrel}"
+_kernver="${_kernel}-big"
+
+# pkgrel encodes the kernel, so every new linux-big is an upgrade of this
+# package too: 7.2.7-2 -> 7020702, 7.3.0-1 -> 7030001.
+_kernel_rel() {
+  local major minor patch
+  IFS=. read -r major minor patch <<< "$_kpkgver"
+  printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
+}
+
+
+_check_kernel() {
+  local headers
+  headers="$(</usr/src/linux-big/version)"
+  if [[ $headers != "$_kernver" ]]; then
+    error "linux-big-headers is $headers, but ../linux-big/PKGBUILD describes $_kernver"
+    return 1
+  fi
+}
+
+pkgname=linux-big-r8168
+pkgver=8.056.02
+pkgrel=$(_kernel_rel)
+pkgdesc="A kernel module for Realtek 8168 network cards, for linux-big"
+arch=('x86_64')
+url="https://github.com/mtorromeo/r8168"
+license=('GPL-2.0-only')
+groups=('linux-big-extramodules')
+depends=('glibc' "linux-big=$_kernel")
+makedepends=("linux-big-headers=$_kernel")
+provides=('r8168')
+options=('!strip' '!debug')
+# The tarball is pinned by its checksum; its PGP signature is not checked, so
+# the CI needs no keyring for it.
+source=("r8168-$pkgver.tar.gz::https://github.com/mtorromeo/r8168/archive/$pkgver/r8168-$pkgver.tar.gz")
+sha256sums=('f8354f4018ae11c651d7df737323c317f14ed6af68066372badeba57c99b7a12')
+
+build() {
+  _check_kernel
+  cd "r8168-$pkgver"
+  make -C "/usr/lib/modules/$_kernver/build" M="$srcdir/r8168-$pkgver/src" \
+    ENABLE_USE_FIRMWARE_FILE=y \
+    CONFIG_R8168_NAPI=y \
+    CONFIG_R8168_VLAN=y \
+    CONFIG_ASPM=y \
+    ENABLE_S5WOL=y \
+    ENABLE_EEE=y \
+    modules
+}
+
+package() {
+  cd "r8168-$pkgver"
+  install -Dm644 src/*.ko -t "$pkgdir/usr/lib/modules/$_kernver/extramodules/"
+  find "$pkgdir" -name '*.ko' -exec strip --strip-debug {} +
+  find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +
+}

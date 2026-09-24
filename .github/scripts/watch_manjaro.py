@@ -38,8 +38,17 @@ MODULES = {
     "linux-big-nvidia": "nvidia-dkms",
     "linux-big-nvidia-580xx-open": "nvidia-580xx-open-dkms",
     "linux-big-nvidia-580xx": "nvidia-580xx-dkms",
+    "linux-big-nvidia-470xx": "nvidia-470xx-dkms",
+    "linux-big-nvidia-390xx": "nvidia-390xx-dkms",
     "linux-big-broadcom-wl": "broadcom-wl-dkms",
+    "linux-big-virtualbox-host-modules": "virtualbox-host-dkms",
+    "linux-big-zfs": "zfs-dkms",
+    "linux-big-vhba-module": "vhba-module-dkms",
+    "linux-big-acpi_call": "acpi_call-dkms",
     "linux-big-bbswitch": None,
+    "linux-big-r8168": None,
+    "linux-big-rtl8723bu": None,
+    "linux-big-tp_smapi": None,
 }
 
 MANJARO_DB = "https://mirrors.manjaro.org/repo/{branch}/extra/x86_64/extra.db"
