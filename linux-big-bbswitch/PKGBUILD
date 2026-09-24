@@ -1,0 +1,79 @@
+# Maintainer: Tales A. Mendonça <talesam@gmail.com>
+#
+# Kernel module to switch off the discrete GPU of Optimus laptops, for linux-big.
+#
+# Nothing here is edited by hand when a driver or the kernel is updated:
+#   - the module source is bbswitch 0.8, with the compatibility patches
+#     Manjaro carries for current kernels;
+#   - the kernel is the linux-big described by ../linux-big/PKGBUILD, which
+#     sets the exact dependency and the pkgrel.
+# The dependency on the exact kernel is deliberate: when a new linux-big is
+# published before its modules, pacman holds the kernel update back instead
+# of booting a kernel without the module.
+#
+# Do not reference the pkgname or url variables anywhere in this file: a
+# testing build in the CI expands them textually.
+
+_kernel_pkgbuild=../linux-big/PKGBUILD
+_kpkgver=$(sed -n 's/^pkgver=//p' "$_kernel_pkgbuild")
+_kpkgrel=$(sed -n 's/^pkgrel=//p' "$_kernel_pkgbuild")
+_kernel="${_kpkgver}-${_kpkgrel}"
+_kernver="${_kernel}-big"
+
+# pkgrel encodes the kernel, so every new linux-big is an upgrade of this
+# package too: 7.2.7-2 -> 7020702, 7.3.0-1 -> 7030001.
+_kernel_rel() {
+  local major minor patch
+  IFS=. read -r major minor patch <<< "$_kpkgver"
+  printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
+}
+
+_check_kernel() {
+  local headers
+  headers="$(</usr/src/linux-big/version)"
+  if [[ $headers != "$_kernver" ]]; then
+    error "linux-big-headers is $headers, but ../linux-big/PKGBUILD describes $_kernver"
+    return 1
+  fi
+}
+
+pkgname=linux-big-bbswitch
+pkgver=0.8
+pkgrel=$(_kernel_rel)
+pkgdesc="Kernel module allowing to switch dedicated graphics card on Optimus laptops, for linux-big"
+arch=('x86_64')
+url="https://github.com/Bumblebee-Project/bbswitch"
+license=('GPL-2.0-or-later')
+groups=('linux-big-extramodules')
+depends=("linux-big=$_kernel")
+makedepends=("linux-big-headers=$_kernel")
+provides=('bbswitch')
+options=('!strip' '!debug')
+source=("bbswitch-$pkgver.tar.gz::https://github.com/Bumblebee-Project/bbswitch/archive/v${pkgver}.tar.gz"
+        '0001-proc_ops-struct.patch'
+        '0002-kernel-5.7.patch'
+        '0003-kernel-5.18.patch')
+sha256sums=('76cabd3f734fb4fe6ebfe3ec9814138d0d6f47d47238521ecbd6a986b60d1477'
+            '41fd734ffebbb98a15732258c18ad20e621d8b002600d77b273c572c6e82a3e2'
+            'e7bb0256c5d4304fdd10efa4ef1c626737b78093ac38cad26d89adcab05a32ab'
+            '04061ecbee433de137d8e68cd42271a30c172bb87829cf350d50df1b24414139')
+
+prepare() {
+  cd "bbswitch-$pkgver"
+  patch -Np1 < ../0001-proc_ops-struct.patch
+  patch -Np1 < ../0002-kernel-5.7.patch
+  patch -Np1 < ../0003-kernel-5.18.patch
+}
+
+build() {
+  _check_kernel
+  cd "bbswitch-$pkgver"
+  # The linux-big headers default external modules to Clang and ld.lld.
+  make KDIR="/usr/lib/modules/$_kernver/build"
+}
+
+package() {
+  cd "bbswitch-$pkgver"
+  install -Dm644 -t "$pkgdir/usr/lib/modules/$_kernver/extramodules/" *.ko
+  find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +
+}

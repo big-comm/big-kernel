@@ -1,0 +1,68 @@
+name: 🔎 Keep kernel modules in step
+
+# Rebuilds the linux-big module packages (NVIDIA, broadcom-wl, bbswitch)
+# whenever they fall behind: Manjaro published a new driver, or a new
+# linux-big was published. See .github/scripts/watch_manjaro.py.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  push:
+    branches: [main]
+    paths:
+      - "linux-big/PKGBUILD"
+      - "linux-big-*/PKGBUILD"
+      - ".github/scripts/**"
+      - ".github/workflows/watch-manjaro.yml"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only report what would be built"
+        type: boolean
+        default: false
+      force:
+        description: "Dispatch again builds that were already dispatched"
+        type: boolean
+        default: false
+
+# One run at a time, so two runs never dispatch the same build.
+concurrency:
+  group: watch-manjaro
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the watcher
+        run: python3 -m unittest discover -s .github/scripts -v
+
+      # Which builds were already dispatched, so a failing one is not
+      # dispatched again every half hour.
+      - name: Restore dispatch state
+        uses: actions/cache/restore@v4
+        with:
+          path: watch-state.json
+          key: watch-state-${{ github.run_id }}
+          restore-keys: watch-state-
+
+      - name: Dispatch the modules that are behind
+        env:
+          # A token allowed to dispatch to big-comm/build-package.
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN || secrets.ORGANIZATION_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+        run: python3 .github/scripts/watch_manjaro.py --state watch-state.json $DRY_RUN $FORCE
+
+      - name: Save dispatch state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: watch-state.json
+          key: watch-state-${{ github.run_id }}

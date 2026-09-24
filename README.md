@@ -28,7 +28,8 @@ gaming or not, on the hardware our users actually have.
 - [Patches](#patches)
 - [Installing](#installing)
 - [Checking that it works](#checking-that-it-works)
-- [External modules (DKMS, NVIDIA)](#external-modules-dkms-nvidia)
+- [NVIDIA and other kernel modules](#nvidia-and-other-kernel-modules)
+- [External modules (DKMS)](#external-modules-dkms)
 - [System tuning stays in BigLinux](#system-tuning-stays-in-biglinux)
 - [Building it yourself](#building-it-yourself)
 - [Roadmap](#roadmap)
@@ -196,13 +197,43 @@ BORE and POC can be switched off at runtime, for comparison, with
 
 ---
 
-## External modules (DKMS, NVIDIA)
+## NVIDIA and other kernel modules
+
+Like the Manjaro kernels, linux-big has prebuilt modules, installed by mhwd
+the same way (`<kernel>-nvidia-open` and so on):
+
+| Package | For |
+|---|---|
+| `linux-big-nvidia-open` | NVIDIA, Turing (RTX 20) and newer, open modules |
+| `linux-big-nvidia` | NVIDIA, Turing and newer, proprietary modules |
+| `linux-big-nvidia-580xx-open`, `linux-big-nvidia-580xx` | NVIDIA 580xx, for older cards |
+| `linux-big-broadcom-wl` | Broadcom BCM43xx Wi-Fi |
+| `linux-big-bbswitch` | switching off the discrete GPU of Optimus laptops |
+
+They are built with dkms from the driver packages in Manjaro's repositories —
+no driver code lives here — and each one depends on one exact linux-big and
+one exact driver version. That is what keeps an update from breaking graphics:
+if a new kernel or a new NVIDIA driver is published before its module, pacman
+holds that update back instead of booting without a driver.
+
+Nobody rebuilds them by hand. The [watcher](.github/workflows/watch-manjaro.yml)
+compares, every 30 minutes and for both the testing and stable branches, what
+the modules should be — the current Manjaro driver on the current linux-big —
+with what BigCommunity has published, and dispatches a build of every module
+that is behind. A new driver is picked up in Manjaro testing, days before it
+reaches stable.
+
+The kernel build itself checks the other direction: in the CI, `check()` builds
+the NVIDIA open driver against the new kernel, and a kernel it does not build
+against is not published.
+
+## External modules (DKMS)
 
 A kernel built with Clang and LTO needs its external modules built with the same
 toolchain. `linux-big-headers` depends on `clang`, `llvm` and `lld` and sets
-`LLVM=1` in its build Makefile, so DKMS modules — NVIDIA, VirtualBox and others
-— are compiled with Clang automatically. No action is needed; an explicit
-`LLVM=` on the command line still overrides it.
+`LLVM=1` in its build Makefile, so DKMS modules are compiled with Clang
+automatically — the NVIDIA DKMS packages were tested this way too. No action is
+needed; an explicit `LLVM=` on the command line still overrides it.
 
 ---
 
@@ -224,24 +255,77 @@ echo adios | sudo tee /sys/block/nvme0n1/queue/scheduler
 
 ## Building it yourself
 
+### Requirements
+
+- An Arch-based system (BigCommunity, BigLinux, Manjaro, Arch).
+- About **30 GB** of free disk space and **16 GB of RAM** or more; the ThinLTO
+  link is the memory-hungry step.
+- A few hours of CPU: about 50 minutes on a 14-core desktop, much longer on a
+  laptop.
+
+### Build and install the kernel
+
 ```bash
 git clone https://github.com/big-comm/big-kernel
 cd big-kernel/linux-big
 makepkg -s
 ```
 
-Building needs about 30 GB of disk and a few hours of CPU; the ThinLTO link is
-memory hungry, so limit the parallel jobs on machines with little RAM
-(`MAKEFLAGS=-j8`).
+`makepkg -s` installs the build dependencies (Clang, LLVM, Rust, ...), downloads
+the kernel from kernel.org, applies the patches and builds. On a machine with
+little memory, or to keep it usable while it builds, limit the parallel jobs:
+
+```bash
+MAKEFLAGS=-j8 nice makepkg -s
+```
+
+Then install both packages; they go next to your current kernel:
+
+```bash
+sudo pacman -U linux-big-*.pkg.tar.zst
+```
+
+Boot **linux-big** from the GRUB menu, and remove another kernel only once it
+has booted fine.
+
+### Build a module
+
+With `linux-big-headers` of the same version installed:
+
+```bash
+cd big-kernel/linux-big-nvidia-open   # or any linux-big-* directory
+makepkg -s
+sudo pacman -U linux-big-nvidia-open-*.pkg.tar.zst
+```
+
+The module reads the kernel version from `../linux-big/PKGBUILD` and the
+driver version from your repositories, so it builds for the kernel and driver
+you have.
+
+### Notes
+
+- A local build does not run the NVIDIA check the CI runs; it would install
+  the NVIDIA driver on your machine.
+- To tweak the configuration, edit `linux-big/config`. The options listed in
+  `_required_options` in the PKGBUILD must stay: the build refuses to go on
+  without them.
+
+### How the official packages are built
 
 Official packages are built by the BigCommunity CI
 ([build-package](https://github.com/big-comm/build-package)). The repository
-holds one directory per kernel; the CI builds the one it is asked for.
+holds one directory per package, and the CI builds the one it is asked for.
 
 ```
 big-kernel/
-├── linux-big/      # current stable kernel: PKGBUILD, config, patches
-└── .github/assets/ # images for this page
+├── linux-big/                  # the kernel: PKGBUILD, config, patches
+├── linux-big-nvidia*/          # NVIDIA modules
+├── linux-big-broadcom-wl/      # Broadcom Wi-Fi module
+├── linux-big-bbswitch/         # Optimus GPU switch module
+└── .github/
+    ├── workflows/              # the module watcher
+    ├── scripts/                # the watcher and its tests
+    └── assets/                 # images for this page
 ```
 
 ---
@@ -252,7 +336,7 @@ big-kernel/
 - [x] Built ready for AutoFDO
 - [ ] Validation on Intel (Arrow Lake) and AMD (Zen 2) machines, and with NVIDIA DKMS
 - [ ] **linux-big-lts** — the 6.18 long-term series, as a conservative fallback
-- [ ] Kernel modules the BigCommunity ISO needs (`broadcom-wl`, `bbswitch`)
+- [x] NVIDIA, `broadcom-wl` and `bbswitch` modules, kept in step automatically
 - [ ] Selectable in the BigCommunity ISO builder
 - [ ] **AutoFDO profile** from real gaming and desktop workloads, shipped in the package
 - [ ] **Propeller** on top of AutoFDO
