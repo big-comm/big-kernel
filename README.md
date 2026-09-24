@@ -218,10 +218,12 @@ holds that update back instead of booting without a driver.
 
 Nobody rebuilds them by hand. The [watcher](.github/workflows/watch-manjaro.yml)
 compares, every 30 minutes and for both the testing and stable branches, what
-the modules should be — the current Manjaro driver on the current linux-big —
-with what BigCommunity has published, and dispatches a build of every module
-that is behind. A new driver is picked up in Manjaro testing, days before it
-reaches stable.
+the modules should be — the driver users get, on the current linux-big — with
+what BigCommunity has published, and dispatches a build of every module that is
+behind. The driver version is resolved the way pacman does it: from the first
+repository in the users' order that has it — BigLinux, then Manjaro, then
+BigCommunity — so a driver BigLinux publishes ahead of Manjaro is followed too.
+A new driver is picked up in Manjaro testing, days before it reaches stable.
 
 The kernel build itself checks the other direction: in the CI, `check()` builds
 the NVIDIA open driver against the new kernel, and a kernel it does not build

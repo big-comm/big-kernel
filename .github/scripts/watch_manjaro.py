@@ -6,7 +6,9 @@ depend on one exact linux-big and on one exact driver version. They go stale
 in two ways: a new linux-big is published, or Manjaro publishes a new driver.
 Either way the right version is computable, and this script compares it with
 what BigCommunity has published, branch by branch, and dispatches a build of
-every module that is behind.
+every module that is behind. The driver version is the one users get: the
+first of their repositories that has it -- BigLinux, Manjaro, BigCommunity --
+in their pacman.conf order, since that is how pacman chooses.
 
 Nothing is edited: the module PKGBUILDs read the driver version from pacman
 and the kernel version from ../linux-big/PKGBUILD when they build, so a build
@@ -40,12 +42,41 @@ MODULES = {
     "linux-big-bbswitch": None,
 }
 
-# BigCommunity branch -> (Manjaro branch the build runs against, our database).
-BRANCHES = {
-    "stable": ("stable", "https://repo.communitybig.org/stable/x86_64/community-stable.db"),
-    "testing": ("testing", "https://repo.communitybig.org/testing/x86_64/community-testing.db"),
-}
 MANJARO_DB = "https://mirrors.manjaro.org/repo/{branch}/extra/x86_64/extra.db"
+COMMUNITY_DB = "https://repo.communitybig.org/{branch}/x86_64/community-{branch}.db"
+BIGLINUX_DB = "https://repo.biglinux.com.br/{branch}/x86_64/biglinux-{branch}.db"
+
+# BigCommunity branch -> the Manjaro branch its builds run against, the
+# database modules are published to, and the repositories a user of that
+# branch has, in their pacman.conf order. pacman takes a package from the
+# first repository that has it, so that order decides which driver version
+# users get: a driver BigLinux publishes ahead of Manjaro's wins.
+BRANCHES = {
+    "stable": (
+        "stable",
+        COMMUNITY_DB.format(branch="stable"),
+        [
+            BIGLINUX_DB.format(branch="update-stable"),
+            MANJARO_DB.format(branch="stable"),
+            COMMUNITY_DB.format(branch="stable"),
+            COMMUNITY_DB.format(branch="extra"),
+            BIGLINUX_DB.format(branch="stable"),
+        ],
+    ),
+    "testing": (
+        "testing",
+        COMMUNITY_DB.format(branch="testing"),
+        [
+            BIGLINUX_DB.format(branch="update-stable"),
+            MANJARO_DB.format(branch="testing"),
+            COMMUNITY_DB.format(branch="testing"),
+            COMMUNITY_DB.format(branch="stable"),
+            COMMUNITY_DB.format(branch="extra"),
+            BIGLINUX_DB.format(branch="testing"),
+            BIGLINUX_DB.format(branch="stable"),
+        ],
+    ),
+}
 
 
 def log(message):
@@ -96,6 +127,15 @@ def without_pkgrel(version):
     return version.rsplit("-", 1)[0]
 
 
+def first_in(search, package, fetch_database):
+    """The version of package in the first repository that has it, like pacman."""
+    for url in search:
+        version = fetch_database(url).get(package)
+        if version:
+            return version
+    return None
+
+
 def plan(root, fetch_database):
     """Return the builds to dispatch as (branch, manjaro_branch, module, expected)."""
     kernel_pkgbuild = os.path.join(root, "linux-big", "PKGBUILD")
@@ -106,21 +146,21 @@ def plan(root, fetch_database):
     log(f"linux-big in the repository: {kernel} (module pkgrel {rel})")
 
     builds = []
-    for branch, (manjaro_branch, ours_url) in BRANCHES.items():
+    for branch, (manjaro_branch, ours_url, search) in BRANCHES.items():
         ours = fetch_database(ours_url)
         published = ours.get("linux-big")
         if published != kernel:
             log(f"[{branch}] linux-big {kernel} is not published (found {published}); modules wait for it")
             continue
-        manjaro = fetch_database(MANJARO_DB.format(branch=manjaro_branch))
         for module, source in MODULES.items():
             if source is None:
                 driver = pkgbuild_value(os.path.join(root, module, "PKGBUILD"), "pkgver")
-            elif source in manjaro:
-                driver = without_pkgrel(manjaro[source])
             else:
-                log(f"[{branch}] {module}: {source} is not in Manjaro {manjaro_branch}, skipped")
-                continue
+                found = first_in(search, source, fetch_database)
+                if found is None:
+                    log(f"[{branch}] {module}: {source} is in none of the {branch} repositories, skipped")
+                    continue
+                driver = without_pkgrel(found)
             expected = f"{driver}-{rel}"
             current = ours.get(module)
             if current == expected:

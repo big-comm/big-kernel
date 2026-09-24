@@ -38,14 +38,24 @@ def up_to_date(manjaro):
     return ours
 
 
-def databases(stable_ours, testing_ours, stable_manjaro=MANJARO, testing_manjaro=MANJARO):
+def databases(stable_ours, testing_ours, stable_manjaro=MANJARO, testing_manjaro=MANJARO, **extra):
+    """Every repository the watcher reads; the ones not given are empty."""
     by_url = {
         watch.BRANCHES["stable"][1]: stable_ours,
         watch.BRANCHES["testing"][1]: testing_ours,
         watch.MANJARO_DB.format(branch="stable"): stable_manjaro,
         watch.MANJARO_DB.format(branch="testing"): testing_manjaro,
     }
-    return lambda url: by_url[url]
+    for name, db in extra.items():
+        by_url[watch.BIGLINUX_DB.format(branch=name.replace("_", "-"))] = db
+    known = {url for _m, _o, search in watch.BRANCHES.values() for url in search} | set(by_url)
+
+    def fetch(url):
+        if url not in known:
+            raise AssertionError(f"unexpected repository {url}")
+        return by_url.get(url, {})
+
+    return fetch
 
 
 def modules(builds, branch=None):
@@ -87,6 +97,29 @@ class Plan(unittest.TestCase):
         published["linux-big"] = KERNEL
         builds = watch.plan(ROOT, databases(published, {}))
         self.assertEqual(modules(builds, "stable"), sorted(watch.MODULES))
+
+    def test_a_driver_biglinux_publishes_first_wins_as_it_does_for_pacman(self):
+        # biglinux-update-stable comes before Manjaro's extra in pacman.conf.
+        biglinux = {"nvidia-open-dkms": "615.10.02-1"}
+        builds = watch.plan(
+            ROOT, databases(up_to_date(MANJARO), {}, update_stable=biglinux)
+        )
+        self.assertEqual([(m, e) for _b, _mb, m, e in builds], [("linux-big-nvidia-open", f"615.10.02-{REL}")])
+
+    def test_a_driver_only_in_biglinux_stable_is_found(self):
+        partial = {k: v for k, v in MANJARO.items() if k != "broadcom-wl-dkms"}
+        builds = watch.plan(
+            ROOT,
+            databases({"linux-big": KERNEL}, {}, stable_manjaro=partial, stable={"broadcom-wl-dkms": "6.30.223.271-50"}),
+        )
+        found = {m: e for _b, _mb, m, e in builds}
+        self.assertEqual(found["linux-big-broadcom-wl"], f"6.30.223.271-{REL}")
+
+    def test_manjaro_still_wins_over_biglinux_stable_which_comes_after_it(self):
+        builds = watch.plan(
+            ROOT, databases(up_to_date(MANJARO), {}, stable={"nvidia-open-dkms": "999.0-1"})
+        )
+        self.assertEqual(builds, [])
 
     def test_a_driver_missing_from_manjaro_is_skipped_not_fatal(self):
         partial = {k: v for k, v in MANJARO.items() if k != "nvidia-580xx-dkms"}
