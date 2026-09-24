@@ -48,6 +48,14 @@ makedepends=(
   zlib
   zstd
 )
+# Gate, CI only: check() builds the NVIDIA open driver against this kernel,
+# so a kernel that would leave NVIDIA users without their driver is never
+# published. Not for a local build, where it would install the NVIDIA driver
+# on the builder's own machine.
+if [[ -n ${CI:-} || -n ${GITHUB_ACTIONS:-} ]]; then
+  checkdepends=(nvidia-open-dkms)
+fi
+
 # The kernel handles its own optimisation and LTO; makepkg must not add its own.
 options=(
   !debug
@@ -235,6 +243,32 @@ build() {
   fi
   make "${_llvm[@]}" "${autofdo[@]}" ${MAKEFLAGS} bzImage modules
   make -C tools/bpf/bpftool "${_llvm[@]}" vmlinux.h feature-clang-bpf-co-re=1
+}
+
+check() {
+  local nvidia
+  nvidia=$(find /usr/src -maxdepth 1 -type d -name 'nvidia-*' | sort -V | tail -1)
+  if [[ -z $nvidia ]]; then
+    msg "NVIDIA gate skipped: no nvidia-open-dkms source (local build)"
+    return 0
+  fi
+
+  msg "NVIDIA gate: building $(basename "$nvidia") against this kernel"
+  rm -rf "$srcdir/nvidia-gate"
+  cp -a "$nvidia" "$srcdir/nvidia-gate"
+  cd "$srcdir/nvidia-gate"
+  # The toolchain dkms uses for a Clang-built kernel.
+  CC=clang LD=ld.lld make "${_llvm[@]}" ${MAKEFLAGS} IGNORE_PREEMPT_RT_PRESENCE=1 \
+    SYSSRC="$srcdir/$_srcdir" SYSOUT="$srcdir/$_srcdir" modules
+
+  local module
+  for module in nvidia nvidia-modeset nvidia-drm nvidia-uvm; do
+    if [[ ! -f kernel-open/$module.ko ]]; then
+      error "NVIDIA gate: $module.ko was not built"
+      return 1
+    fi
+  done
+  msg "NVIDIA gate passed"
 }
 
 _package() {
