@@ -1,0 +1,157 @@
+name: 🐧 Follow the kernel series
+
+# Moves linux-big to each new kernel.org release of its series (7.2.8,
+# 7.2.9, ...): updates the PKGBUILD, drops the patches that reached the
+# kernel, runs prepare() to prove every patch and option still holds, then
+# commits and sends the kernel to be built for testing. The module watcher
+# rebuilds the modules once it is published.
+#
+# When prepare() fails, or the series reaches its end of life, it opens an
+# issue instead: fixing a patch and choosing the next series are for a person.
+# So is moving testing to stable. See .github/scripts/bump_kernel.py.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run the update and prepare(), but commit and build nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: watch-kernel
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  follow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # The image the packages are built in: prepare() runs with the same
+    # toolchain the build will use.
+    container:
+      image: talesam/community-build:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare the container
+        run: |
+          sudo chown -R builduser:builduser "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo sed -i '/MAKEFLAGS=/s/.*/MAKEFLAGS="-j'"$(nproc)"'"/' /etc/makepkg.conf
+          sudo pacman -Sy --noconfirm
+
+      - name: Test the watcher
+        run: python3 -m unittest discover -s .github/scripts -v
+
+      # The kernel tarball is the same for the whole series.
+      - name: Restore downloads
+        uses: actions/cache@v4
+        with:
+          path: kernel-cache
+          key: kernel-cache-${{ hashFiles('linux-big/PKGBUILD') }}
+          restore-keys: kernel-cache-
+
+      - name: Update to the newest release of the series
+        id: bump
+        run: |
+          python3 .github/scripts/bump_kernel.py --cache kernel-cache --result "$RUNNER_TEMP/bump.json"
+          # Keep only this series' tarball and the newest patch in the cache.
+          find kernel-cache -name 'patch-*.xz' ! -name "patch-$(jq -r '.to // ""' "$RUNNER_TEMP/bump.json").xz" -delete
+          {
+            echo "status=$(jq -r .status "$RUNNER_TEMP/bump.json")"
+            echo "from=$(jq -r .from "$RUNNER_TEMP/bump.json")"
+            echo "to=$(jq -r '.to // ""' "$RUNNER_TEMP/bump.json")"
+            echo "series=$(jq -r .series "$RUNNER_TEMP/bump.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      # Commits and builds happen only from the default branch, the one the
+      # build service checks out; a run on another branch only reports.
+      - name: Commit the update
+        if: steps.bump.outputs.status == 'bumped' && !inputs.dry_run && github.ref_name == github.event.repository.default_branch
+        env:
+          FROM: ${{ steps.bump.outputs.from }}
+          TO: ${{ steps.bump.outputs.to }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898898+github-actions[bot]@users.noreply.github.com"
+          git add -A linux-big
+          {
+            echo "⬆️ linux-big: $FROM → $TO"
+            echo
+            echo "Updated by the kernel watcher: prepare() applied every patch"
+            echo "and kept every required option on $TO."
+            jq -r 'if (.dropped | length) > 0 then "\nAlready in \(.to), dropped:\n" + (.dropped | map("  " + .) | join("\n")) else empty end' "$RUNNER_TEMP/bump.json"
+          } > "$RUNNER_TEMP/message"
+          git commit -F "$RUNNER_TEMP/message"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Build it for testing
+        if: steps.bump.outputs.status == 'bumped' && !inputs.dry_run && github.ref_name == github.event.repository.default_branch
+        env:
+          # A token allowed to dispatch to big-comm/build-package.
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN || secrets.ORGANIZATION_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import watch_manjaro
+          token = os.environ.get("DISPATCH_TOKEN")
+          if not token:
+              sys.exit("DISPATCH_TOKEN is not set: the update is committed, but nothing was sent to build")
+          body = watch_manjaro.payload("testing", "testing", "linux-big")
+          print("dispatched:", watch_manjaro.dispatch(token, body), body)
+          EOF
+
+      - name: Report what needs a person
+        if: steps.bump.outputs.status == 'failed' || steps.bump.outputs.status == 'eol'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = JSON.parse(require('fs').readFileSync(`${process.env.RUNNER_TEMP}/bump.json`, 'utf8'));
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let title, body;
+            if (result.status === 'eol') {
+              title = `linux-big: kernel ${result.series} reached its end of life`;
+              body = [
+                `kernel.org no longer maintains ${result.series}; linux-big is on ${result.from}.`,
+                '',
+                'Moving to the next series is not automatic: set `_basekernel` and `pkgver`,',
+                'refresh the config and the patches, and build it for testing.',
+                '',
+                `Run: ${run}`,
+              ].join('\n');
+            } else {
+              title = `linux-big: ${result.to} does not prepare`;
+              body = [
+                `The update from ${result.from} to ${result.to} failed in prepare(); nothing was committed or built.`,
+                '',
+                '```',
+                ...(result.reasons.length ? result.reasons : ['(no reason found in the output; see the run)']),
+                '```',
+                '',
+                ...(result.dropped.length ? [`Already in ${result.to}, would be dropped: ${result.dropped.join(', ')}`, ''] : []),
+                'Refresh the patch or the option, then set pkgver yourself or let the watcher retry.',
+                '',
+                `Run: ${run}`,
+              ].join('\n');
+            }
+            // One issue per problem: later runs do not open it again.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open',
+            });
+            if (open.some(issue => issue.title === title)) {
+              core.info(`already reported: ${title}`);
+              return;
+            }
+            if (${{ inputs.dry_run || false }}) {
+              core.info(`dry run, would open: ${title}\n${body}`);
+              return;
+            }
+            await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+            core.info(`opened: ${title}`);

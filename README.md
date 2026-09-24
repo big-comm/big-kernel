@@ -28,6 +28,7 @@ gaming or not, on the hardware our users actually have.
 - [Patches](#patches)
 - [Installing](#installing)
 - [Checking that it works](#checking-that-it-works)
+- [Kernel updates](#kernel-updates)
 - [NVIDIA and other kernel modules](#nvidia-and-other-kernel-modules)
 - [External modules (DKMS)](#external-modules-dkms)
 - [System tuning stays in BigLinux](#system-tuning-stays-in-biglinux)
@@ -197,6 +198,30 @@ BORE and POC can be switched off at runtime, for comparison, with
 
 ---
 
+## Kernel updates
+
+linux-big follows its kernel.org series by itself. Every six hours the
+[kernel watcher](.github/workflows/watch-kernel.yml) checks kernel.org, and when
+a new release of the series is out (7.2.8, 7.2.9, …) it:
+
+1. moves the PKGBUILD to it — new `pkgver`, `pkgrel` back to 1, the new stable
+   patch and its checksum;
+2. drops the patches that release already contains. They are applied in order
+   on the new tree, as the build does, and one that no longer applies but
+   applies in reverse is already in the kernel;
+3. runs the package's own `prepare()`, in the same container the packages are
+   built in: every patch must apply and every option linux-big exists for
+   (BORE, ADIOS, POC, Clang ThinLTO, AutoFDO, …) must survive the configuration;
+4. commits the update and sends linux-big to be built for **testing**. Once it
+   is published, the module watcher rebuilds the modules for it.
+
+When a patch no longer fits or an option is lost, nothing is committed or
+built: the watcher opens an issue naming the patch or the option, once. It
+does the same when kernel.org marks the series end of life.
+
+Three decisions stay with a person: moving a kernel from testing to stable,
+moving to the next series (7.3), and refreshing a patch that stopped applying.
+
 ## NVIDIA and other kernel modules
 
 Like the Manjaro kernels, linux-big has prebuilt modules, installed by mhwd
@@ -337,8 +362,8 @@ big-kernel/
 ├── linux-big-broadcom-wl/      # Broadcom Wi-Fi module
 ├── linux-big-bbswitch/         # Optimus GPU switch module
 └── .github/
-    ├── workflows/              # the module watcher
-    ├── scripts/                # the watcher and its tests
+    ├── workflows/              # the kernel and module watchers
+    ├── scripts/                # the watchers and their tests
     └── assets/                 # images for this page
 ```
 
@@ -351,6 +376,7 @@ big-kernel/
 - [ ] Validation on Intel (Arrow Lake) and AMD (Zen 2) machines, and with NVIDIA DKMS
 - [ ] **linux-big-lts** — the 6.18 long-term series, as a conservative fallback
 - [x] The 15 kernel modules Manjaro builds for its kernels, kept in step automatically
+- [x] New releases of the kernel series picked up, checked and built for testing automatically
 - [ ] Selectable in the BigCommunity ISO builder
 - [ ] **AutoFDO profile** from real gaming and desktop workloads, shipped in the package
 - [ ] **Propeller** on top of AutoFDO
