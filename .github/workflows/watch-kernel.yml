@@ -62,7 +62,9 @@ jobs:
         run: |
           python3 .github/scripts/bump_kernel.py --cache kernel-cache --result "$RUNNER_TEMP/bump.json"
           # Keep only this series' tarball and the newest patch in the cache.
-          find kernel-cache -name 'patch-*.xz' ! -name "patch-$(jq -r '.to // ""' "$RUNNER_TEMP/bump.json").xz" -delete
+          if [[ -d kernel-cache ]]; then
+            find kernel-cache -name 'patch-*.xz' ! -name "patch-$(jq -r '.to // ""' "$RUNNER_TEMP/bump.json").xz" -delete
+          fi
           {
             echo "status=$(jq -r .status "$RUNNER_TEMP/bump.json")"
             echo "from=$(jq -r .from "$RUNNER_TEMP/bump.json")"

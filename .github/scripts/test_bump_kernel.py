@@ -231,6 +231,15 @@ class Main(unittest.TestCase):
         self.assertEqual(self.run_watcher(releases(("stable", "7.2.6", False)))["status"], "current")
         self.assertEqual(self.pkgbuild(), before)
 
+    def test_a_current_run_leaves_the_cache_directory(self):
+        # The workflow prunes the cache after every run; with nothing to
+        # download the directory must exist all the same.
+        self.series([("0001-ours.patch", diff("a.c", A, A_OURS))])
+        import shutil
+        shutil.rmtree(self.cache)
+        self.assertEqual(self.run_watcher(releases(("stable", "7.2.6", False)))["status"], "current")
+        self.assertTrue(os.path.isdir(self.cache))
+
     def test_end_of_life_is_reported_not_acted_on(self):
         self.series([("0001-ours.patch", diff("a.c", A, A_OURS))])
         before = self.pkgbuild()

@@ -182,6 +182,9 @@ def main():
     parser.add_argument("--no-prepare", action="store_true", help="skip makepkg -o")
     args = parser.parse_args()
 
+    # Before any early return: the workflow caches this directory, and a run
+    # with nothing to download must still leave it there.
+    os.makedirs(args.cache, exist_ok=True)
     pkgbuild = os.path.join(args.root, "linux-big", "PKGBUILD")
     text = open(pkgbuild, encoding="utf-8").read()
     current = pkgbuild_value(text, "pkgver")
@@ -201,7 +204,6 @@ def main():
         return finish("current", to=latest)
     log(f"linux-big {current} -> {latest}")
 
-    os.makedirs(args.cache, exist_ok=True)
     cdn = CDN.format(major=series.split(".")[0])
     downloads = {}
     for name in (f"linux-{series}.tar.xz", f"patch-{latest}.xz"):
