@@ -305,8 +305,11 @@ _package() {
   # No kernelbase file on purpose -- Manjaro's hook would then name it
   # vmlinuz-7.2-x86_64 and overwrite the Manjaro kernel of the same series.
   echo "$pkgbase" | install -Dm644 /dev/stdin "$modulesdir/pkgbase"
+  # The GRUB menu title. grub's 10_linux looks for it by the image name, so
+  # vmlinuz-linux-big reads linux-big.kver; under any other name the entry
+  # shows only "big". Only the title uses it.
   mkdir -p "${pkgdir}/boot"
-  echo "$(<version) x64" > "${pkgdir}/boot/${pkgbase}-${CARCH}.kver"
+  echo "$(<version) x64" > "${pkgdir}/boot/${pkgbase}.kver"
 
   echo "Installing modules..."
   ZSTD_CLEVEL=19 make "${_llvm[@]}" INSTALL_MOD_PATH="$pkgdir/usr" INSTALL_MOD_STRIP=1 \
