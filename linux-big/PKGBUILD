@@ -116,7 +116,7 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
 )
 sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
             '7d08d70146f0c81bfd529d97450044d356e774a93ae2ec041e7cd825f48b0695'
-            '9b167034277170e1311a03884cd69fd94f09b116ce0f0f7451f3617be2e5fd7c'
+            '0d7a55d95acde5c76da3bdc184030b9799b27be1422fbb4833349382d0864467'
             'e5e98d62b63704cecdf32dbe6a9bafea6e70b23fa8e01fe96ca220ac6036392e'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
             '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
