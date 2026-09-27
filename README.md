@@ -212,8 +212,10 @@ a new release of the series is out (7.2.8, 7.2.9, …) it:
 3. runs the package's own `prepare()`, in the same container the packages are
    built in: every patch must apply and every option linux-big exists for
    (BORE, ADIOS, POC, Clang ThinLTO, AutoFDO, …) must survive the configuration;
-4. commits the update and sends linux-big to be built for **testing**. Once it
-   is published, the module watcher rebuilds the modules for it.
+4. commits the update. The module watcher, which compares the PKGBUILD with
+   what is published every 30 minutes, then sends linux-big to be built for
+   **testing**, and the modules once it is published. Building is decided from
+   what is published, so a dispatch that fails is simply retried.
 
 When a patch no longer fits or an option is lost, nothing is committed or
 built: the watcher opens an issue naming the patch or the option, once. It

@@ -3,8 +3,9 @@ name: 🐧 Follow the kernel series
 # Moves linux-big to each new kernel.org release of its series (7.2.8,
 # 7.2.9, ...): updates the PKGBUILD, drops the patches that reached the
 # kernel, runs prepare() to prove every patch and option still holds, then
-# commits and sends the kernel to be built for testing. The module watcher
-# rebuilds the modules once it is published.
+# commits. It builds nothing itself: the module watcher sees the PKGBUILD
+# ahead of testing, sends the kernel to be built for testing, and then the
+# modules once it is published -- so a dispatch that fails is retried.
 #
 # When prepare() fails, or the series reaches its end of life, it opens an
 # issue instead: fixing a patch and choosing the next series are for a person.
@@ -72,7 +73,7 @@ jobs:
             echo "series=$(jq -r .series "$RUNNER_TEMP/bump.json")"
           } >> "$GITHUB_OUTPUT"
 
-      # Commits and builds happen only from the default branch, the one the
+      # Commits happen only from the default branch, the one the
       # build service checks out; a run on another branch only reports.
       - name: Commit the update
         if: steps.bump.outputs.status == 'bumped' && !inputs.dry_run && github.ref_name == github.event.repository.default_branch
@@ -92,23 +93,6 @@ jobs:
           } > "$RUNNER_TEMP/message"
           git commit -F "$RUNNER_TEMP/message"
           git push origin "HEAD:${GITHUB_REF_NAME}"
-
-      - name: Build it for testing
-        if: steps.bump.outputs.status == 'bumped' && !inputs.dry_run && github.ref_name == github.event.repository.default_branch
-        env:
-          # A token allowed to dispatch to big-comm/build-package.
-          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN || secrets.ORGANIZATION_TOKEN }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys
-          sys.path.insert(0, ".github/scripts")
-          import watch_manjaro
-          token = os.environ.get("DISPATCH_TOKEN")
-          if not token:
-              sys.exit("DISPATCH_TOKEN is not set: the update is committed, but nothing was sent to build")
-          body = watch_manjaro.payload("testing", "testing", "linux-big")
-          print("dispatched:", watch_manjaro.dispatch(token, body), body)
-          EOF
 
       - name: Report what needs a person
         if: steps.bump.outputs.status == 'failed' || steps.bump.outputs.status == 'eol'

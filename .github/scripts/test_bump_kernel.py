@@ -67,15 +67,24 @@ class RealPkgbuild(unittest.TestCase):
         self.assertEqual(len(bump.source_entries(REAL_PKGBUILD)), len(bump.checksums(REAL_PKGBUILD)))
 
     def test_bump_changes_only_version_release_and_patch_checksum(self):
-        new = bump.bump(REAL_PKGBUILD, "7.2.9", "a" * 64)
-        self.assertEqual(bump.pkgbuild_value(new, "pkgver"), "7.2.9")
-        self.assertEqual(bump.pkgbuild_value(new, "pkgrel"), "1")
-        old_sums, new_sums = bump.checksums(REAL_PKGBUILD), bump.checksums(new)
-        self.assertEqual(new_sums[1], "a" * 64)
-        self.assertEqual(new_sums[:1] + new_sums[2:], old_sums[:1] + old_sums[2:])
-        self.assertEqual(bump.source_entries(new), bump.source_entries(REAL_PKGBUILD))
-        changed = [line for line in new.splitlines() if line not in REAL_PKGBUILD.splitlines()]
-        self.assertEqual(len(changed), 3, changed)
+        # Whatever pkgrel is: the watcher's own bump leaves it at 1, and the
+        # next bump must not be judged by how many lines changed.
+        import re
+        for pkgrel in (bump.pkgbuild_value(REAL_PKGBUILD, "pkgrel"), "1", "4"):
+            with self.subTest(pkgrel=pkgrel):
+                old = re.sub(r"^pkgrel=.*$", f"pkgrel={pkgrel}", REAL_PKGBUILD, count=1, flags=re.M)
+                new = bump.bump(old, "7.2.99", "a" * 64)
+                self.assertEqual(bump.pkgbuild_value(new, "pkgver"), "7.2.99")
+                self.assertEqual(bump.pkgbuild_value(new, "pkgrel"), "1")
+                old_sums, new_sums = bump.checksums(old), bump.checksums(new)
+                self.assertEqual(new_sums[1], "a" * 64)
+                self.assertEqual(new_sums[:1] + new_sums[2:], old_sums[:1] + old_sums[2:])
+                self.assertEqual(bump.source_entries(new), bump.source_entries(old))
+                # Nothing but those three lines differs.
+                allowed = {"pkgver=7.2.99", "pkgrel=1", "            '" + "a" * 64 + "'"}
+                changed = [n for o, n in zip(old.splitlines(), new.splitlines()) if o != n]
+                self.assertTrue(set(changed) <= allowed, changed)
+                self.assertEqual(len(old.splitlines()), len(new.splitlines()))
 
     def test_drop_removes_the_patch_and_its_own_checksum(self):
         entries, sums = bump.source_entries(REAL_PKGBUILD), bump.checksums(REAL_PKGBUILD)
