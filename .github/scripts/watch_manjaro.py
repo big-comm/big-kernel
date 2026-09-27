@@ -260,6 +260,11 @@ def dispatch(token, body):
         return response.status
 
 
+def save_state(path, state):
+    with open(path, "w", encoding="utf-8") as out:
+        json.dump(state, out, indent=2, sort_keys=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=".", help="the big-kernel repository")
@@ -302,10 +307,10 @@ def main():
         dispatched += 1
         # Saved after each one: if a later dispatch fails, the ones already
         # sent are not sent again.
-        json.dump(state, open(args.state, "w", encoding="utf-8"), indent=2, sort_keys=True)
+        save_state(args.state, state)
 
     if not args.dry_run:
-        json.dump(state, open(args.state, "w", encoding="utf-8"), indent=2, sort_keys=True)
+        save_state(args.state, state)
     log(f"{len(builds)} package(s) behind, {dispatched} dispatched")
 
 

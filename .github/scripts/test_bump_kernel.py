@@ -83,7 +83,7 @@ class RealPkgbuild(unittest.TestCase):
                 # Nothing but those three lines differs.
                 allowed = {"pkgver=7.2.99", "pkgrel=1", "            '" + "a" * 64 + "'"}
                 changed = [n for o, n in zip(old.splitlines(), new.splitlines()) if o != n]
-                self.assertTrue(set(changed) <= allowed, changed)
+                self.assertLessEqual(set(changed), allowed, changed)
                 self.assertEqual(len(old.splitlines()), len(new.splitlines()))
 
     def test_drop_removes_the_patch_and_its_own_checksum(self):
