@@ -162,6 +162,17 @@ def first_in(search, package, fetch_database):
     return None
 
 
+# Branches the kernel itself is sent to when the PKGBUILD moves ahead of what
+# is published. Only testing: moving a kernel to stable is a person's call.
+KERNEL_BRANCHES = ("testing",)
+
+
+def version_key(version):
+    """A sortable key for a linux-big version such as 7.2.8-1."""
+    pkgver, _, pkgrel = version.partition("-")
+    return tuple(int(part) for part in pkgver.split(".")), int(pkgrel or 0)
+
+
 def plan(root, fetch_database):
     """Return the builds to dispatch as (branch, manjaro_branch, module, expected)."""
     kernel_pkgbuild = os.path.join(root, "linux-big", "PKGBUILD")
@@ -176,7 +187,14 @@ def plan(root, fetch_database):
         ours = fetch_database(ours_url)
         published = ours.get("linux-big")
         if published != kernel:
-            log(f"[{branch}] linux-big {kernel} is not published (found {published}); modules wait for it")
+            # The kernel watcher only commits the new version; building it is
+            # decided here, from what is published, so a dispatch that failed
+            # is retried on the next run instead of being forgotten.
+            if branch in KERNEL_BRANCHES and (published is None or version_key(kernel) > version_key(published)):
+                log(f"[{branch}] linux-big: published {published}, PKGBUILD is {kernel}; building it")
+                builds.append((branch, manjaro_branch, "linux-big", kernel))
+            else:
+                log(f"[{branch}] linux-big {kernel} is not published (found {published}); modules wait for it")
             continue
         for module, source in MODULES.items():
             if source is None:
@@ -242,6 +260,11 @@ def dispatch(token, body):
         return response.status
 
 
+def save_state(path, state):
+    with open(path, "w", encoding="utf-8") as out:
+        json.dump(state, out, indent=2, sort_keys=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=".", help="the big-kernel repository")
@@ -282,10 +305,13 @@ def main():
         log(f"[{branch}] dispatched {module} {expected} (HTTP {status})")
         state[key] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         dispatched += 1
+        # Saved after each one: if a later dispatch fails, the ones already
+        # sent are not sent again.
+        save_state(args.state, state)
 
     if not args.dry_run:
-        json.dump(state, open(args.state, "w", encoding="utf-8"), indent=2, sort_keys=True)
-    log(f"{len(builds)} module(s) behind, {dispatched} dispatched")
+        save_state(args.state, state)
+    log(f"{len(builds)} package(s) behind, {dispatched} dispatched")
 
 
 if __name__ == "__main__":

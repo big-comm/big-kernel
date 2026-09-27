@@ -79,16 +79,35 @@ class Plan(unittest.TestCase):
 
     def test_modules_wait_for_the_kernel(self):
         builds = watch.plan(ROOT, databases({}, {}))
-        self.assertEqual(builds, [])
+        self.assertEqual([m for _b, _mb, m, _e in builds], ["linux-big"])
 
     def test_an_older_kernel_published_is_not_enough(self):
         builds = watch.plan(ROOT, databases({"linux-big": "7.2.7-1"}, {}))
+        self.assertEqual([m for _b, _mb, m, _e in builds], ["linux-big"])
+
+    def test_a_kernel_ahead_of_testing_is_built_for_testing(self):
+        # What the kernel watcher leaves behind: the PKGBUILD moved on,
+        # testing still has the previous release. Modules wait for it.
+        builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {"linux-big": "7.2.7-2"}))
+        self.assertEqual(builds, [("testing", "testing", "linux-big", KERNEL)])
+
+    def test_stable_never_gets_a_kernel_by_itself(self):
+        builds = watch.plan(ROOT, databases({"linux-big": "7.2.7-2"}, up_to_date(MANJARO)))
         self.assertEqual(builds, [])
 
+    def test_a_newer_kernel_published_by_hand_is_not_rebuilt_older(self):
+        builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {"linux-big": "9.9.9-1"}))
+        self.assertEqual(builds, [])
+
+    def test_the_kernel_build_is_dispatched_once(self):
+        build = ("testing", "testing", "linux-big", KERNEL)
+        state = {watch.state_key(*build): "2026-09-27T00:00:00Z"}
+        self.assertEqual(watch.pending([build], state), [])
+
     def test_a_published_kernel_without_modules_builds_all_of_them(self):
-        builds = watch.plan(ROOT, databases({"linux-big": KERNEL}, {}))
+        builds = watch.plan(ROOT, databases({"linux-big": KERNEL}, {"linux-big": KERNEL}))
         self.assertEqual(modules(builds, "stable"), sorted(watch.MODULES))
-        self.assertEqual(modules(builds, "testing"), [])
+        self.assertEqual(modules(builds, "testing"), sorted(watch.MODULES))
 
     def test_nothing_is_built_when_everything_matches(self):
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), up_to_date(MANJARO)))
@@ -115,7 +134,8 @@ class Plan(unittest.TestCase):
         builds = watch.plan(
             ROOT, databases(up_to_date(MANJARO), {}, update_stable=biglinux)
         )
-        self.assertEqual([(m, e) for _b, _mb, m, e in builds], [("linux-big-nvidia-open", f"615.10.02-{REL}")])
+        stable = [(m, e) for b, _mb, m, e in builds if b == "stable"]
+        self.assertEqual(stable, [("linux-big-nvidia-open", f"615.10.02-{REL}")])
 
     def test_a_driver_only_in_biglinux_stable_is_found(self):
         partial = {k: v for k, v in MANJARO.items() if k != "broadcom-wl-dkms"}
@@ -130,7 +150,7 @@ class Plan(unittest.TestCase):
         builds = watch.plan(
             ROOT, databases(up_to_date(MANJARO), {}, stable={"nvidia-open-dkms": "999.0-1"})
         )
-        self.assertEqual(builds, [])
+        self.assertEqual([b for b in builds if b[0] == "stable"], [])
 
     def test_every_module_directory_is_watched(self):
         directories = {d for d in os.listdir(ROOT) if d.startswith("linux-big-") and os.path.isfile(os.path.join(ROOT, d, "PKGBUILD"))}
@@ -181,6 +201,13 @@ class Rebuild(unittest.TestCase):
             self.assertEqual(vercmp("2.4.4-7020801", "2.4.4-7020702.1"), 1)
         except FileNotFoundError:
             self.skipTest("vercmp (pacman) not installed")
+
+
+class Versions(unittest.TestCase):
+    def test_kernel_versions_compare_as_numbers(self):
+        self.assertGreater(watch.version_key("7.2.10-1"), watch.version_key("7.2.9-3"))
+        self.assertGreater(watch.version_key("7.2.8-2"), watch.version_key("7.2.8-1"))
+        self.assertGreater(watch.version_key("7.3-1"), watch.version_key("7.2.99-1"))
 
 
 class Rel(unittest.TestCase):
