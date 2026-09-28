@@ -39,8 +39,15 @@ jobs:
       cancel-in-progress: false
     outputs:
       kernel: ${{ steps.dispatch.outputs.kernel }}
+    # contents: write to point the linux-big-stable branch at the commit
+    # stable's modules are built from, when stable is behind main.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The history, to find the commit that described stable's kernel.
+          fetch-depth: 0
 
       - name: Test the watcher
         run: python3 -m unittest discover -s .github/scripts -v

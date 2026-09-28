@@ -5,6 +5,7 @@ Run from the repository root: python3 -m unittest discover -s .github/scripts
 
 import io
 import os
+import re
 import sys
 import tarfile
 import unittest
@@ -93,7 +94,7 @@ class Plan(unittest.TestCase):
 
     def test_stable_never_gets_a_kernel_by_itself(self):
         builds = watch.plan(ROOT, databases({"linux-big": "7.2.7-2"}, up_to_date(MANJARO)))
-        self.assertEqual(builds, [])
+        self.assertNotIn("linux-big", [m for b, _mb, m, _e in builds if b == "stable"])
 
     def test_a_newer_kernel_published_by_hand_is_not_rebuilt_older(self):
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {"linux-big": "9.9.9-1"}))
@@ -159,7 +160,7 @@ class Plan(unittest.TestCase):
     def test_a_driver_missing_from_manjaro_is_skipped_not_fatal(self):
         partial = {k: v for k, v in MANJARO.items() if k != "nvidia-580xx-dkms"}
         builds = watch.plan(ROOT, databases({"linux-big": KERNEL}, {}, stable_manjaro=partial))
-        self.assertNotIn("linux-big-nvidia-580xx", modules(builds))
+        self.assertNotIn("linux-big-nvidia-580xx", modules(builds, "stable"))
 
 
 class Rebuild(unittest.TestCase):
@@ -235,6 +236,123 @@ class Dedupe(unittest.TestCase):
         self.assertEqual(watch.pending([newer], state), [newer])
 
 
+class MovedToStable(unittest.TestCase):
+    """Testing is seen as a testing user sees it: its packages over stable's."""
+
+    def setUp(self):
+        watch.log = lambda _message: None
+
+    def test_moving_everything_to_stable_rebuilds_nothing(self):
+        # Repo-Management moves the files: testing is left without linux-big.
+        builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {}))
+        self.assertEqual(builds, [])
+
+    def test_a_newer_driver_in_testing_goes_to_testing_only(self):
+        newer = dict(MANJARO, **{"nvidia-open-dkms": "615.71.09-1"})
+        builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {}, testing_manjaro=newer))
+        self.assertEqual(builds, [("testing", "testing", "linux-big-nvidia-open", f"615.71.09-{REL}")])
+
+
+class StableBehindMain(unittest.TestCase):
+    """Stable keeps its kernel while main moves on: its modules still follow
+    Manjaro stable, built from the commit that described that kernel."""
+
+    def setUp(self):
+        import shutil
+        import subprocess
+        import tempfile
+        watch.log = lambda _message: None
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo)
+        for entry in ["linux-big", *watch.MODULES]:
+            os.makedirs(os.path.join(self.repo, entry))
+            shutil.copy(os.path.join(ROOT, entry, "PKGBUILD"), os.path.join(self.repo, entry, "PKGBUILD"))
+
+        def git(*args):
+            return subprocess.run(["git", "-C", self.repo, *args], capture_output=True, text=True, check=True).stdout.strip()
+
+        git("init", "-q")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start")
+        git("add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"linux-big {KERNEL}")
+        self.stable_commit = git("rev-parse", "HEAD")
+        kernel = os.path.join(self.repo, "linux-big", "PKGBUILD")
+        text = open(kernel).read()
+        text = re.sub(r"^pkgver=.*$", "pkgver=7.2.99", text, count=1, flags=re.M)
+        text = re.sub(r"^pkgrel=.*$", "pkgrel=1", text, count=1, flags=re.M)
+        open(kernel, "w").write(text)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "linux-big 7.2.99-1")
+
+    def test_a_new_driver_in_stable_is_built_from_stables_commit(self):
+        newer = dict(MANJARO, **{"nvidia-open-dkms": "615.71.09-1"})
+        refs = {}
+        builds = watch.plan(self.repo, databases(up_to_date(MANJARO), up_to_date(MANJARO), stable_manjaro=newer), refs=refs)
+        stable = [b for b in builds if b[0] == "stable"]
+        # The stable kernel's pkgrel, not main's: built against the kernel stable has.
+        self.assertEqual(stable, [("stable", "stable", "linux-big-nvidia-open", f"615.71.09-{REL}")])
+        self.assertEqual(refs, {"stable": self.stable_commit})
+        # Testing follows main: it gets the new kernel.
+        self.assertIn(("testing", "testing", "linux-big", "7.2.99-1"), builds)
+
+    def test_nothing_to_do_for_stable_when_its_modules_match(self):
+        refs = {}
+        builds = watch.plan(self.repo, databases(up_to_date(MANJARO), up_to_date(MANJARO)), refs=refs)
+        self.assertEqual([b for b in builds if b[0] == "stable"], [])
+
+    def test_a_stable_kernel_no_commit_describes_is_left_alone(self):
+        refs = {}
+        builds = watch.plan(self.repo, databases(up_to_date(MANJARO), {}), refs=refs, find=lambda root, k: None)
+        self.assertEqual([b for b in builds if b[0] == "stable"], [])
+        self.assertEqual(refs, {})
+
+    def test_the_commit_is_found_by_the_kernel_it_describes(self):
+        self.assertEqual(watch.find_commit(self.repo, KERNEL), self.stable_commit)
+        self.assertIsNone(watch.find_commit(self.repo, "6.1.0-1"))
+
+
+class StableDispatch(unittest.TestCase):
+    """Stable builds that need an older commit run from linux-big-stable."""
+
+    def test_the_branch_is_pointed_once_and_used_by_every_stable_build(self):
+        import tempfile
+        sent, pointed = [], []
+        state_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        state_file.write("{}")
+        state_file.close()
+        self.addCleanup(os.unlink, state_file.name)
+        builds = [
+            ("stable", "stable", "linux-big-nvidia", "615.71.09-7020801"),
+            ("stable", "stable", "linux-big-nvidia-open", "615.71.09-7020801"),
+            ("testing", "testing", "linux-big", "7.2.99-1"),
+        ]
+
+        def fake_plan(root, fetch, refs=None, **_kw):
+            refs["stable"] = "abc123def456"
+            return builds
+
+        saved = (watch.plan, watch.building, watch.dispatch, watch.point_branch, watch.log, sys.argv)
+        watch.plan, watch.building = fake_plan, (lambda token: set())
+        watch.dispatch = lambda token, body: sent.append((body["event_type"], body["client_payload"]["branch"])) or 204
+        watch.point_branch = lambda root, name, commit: pointed.append((name, commit))
+        watch.log = lambda _message: None
+        sys.argv = ["watch_manjaro.py", "--state", state_file.name]
+        os.environ["DISPATCH_TOKEN"] = "x"
+        github_output = os.environ.pop("GITHUB_OUTPUT", None)
+        try:
+            watch.main()
+        finally:
+            watch.plan, watch.building, watch.dispatch, watch.point_branch, watch.log, sys.argv = saved
+            del os.environ["DISPATCH_TOKEN"]
+            if github_output is not None:
+                os.environ["GITHUB_OUTPUT"] = github_output
+        self.assertEqual(pointed, [(watch.STABLE_REF, "abc123def456")])
+        self.assertEqual(sent, [
+            ("linux-big-nvidia", watch.STABLE_REF),
+            ("linux-big-nvidia-open", watch.STABLE_REF),
+            ("linux-big", "main"),
+        ])
+
+
 class InFlight(unittest.TestCase):
     """A package build-package is already building is not dispatched again."""
 
@@ -246,7 +364,7 @@ class InFlight(unittest.TestCase):
         state_file.close()
         self.addCleanup(os.unlink, state_file.name)
         saved = (watch.plan, watch.building, watch.dispatch, sys.argv, os.environ.get("DISPATCH_TOKEN"))
-        watch.plan = lambda root, fetch: builds
+        watch.plan = lambda root, fetch, **_kw: builds
         watch.building = lambda token: active
         watch.dispatch = lambda token, body: sent.append(body["event_type"]) or 204
         sys.argv = ["watch_manjaro.py", "--state", state_file.name]

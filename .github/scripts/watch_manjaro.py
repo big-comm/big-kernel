@@ -23,6 +23,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tarfile
 import time
@@ -89,6 +90,21 @@ BRANCHES = {
 }
 
 
+# What a user of each branch sees of BigCommunity's own packages, lowest
+# priority first: a testing user also has stable, and pacman takes testing's
+# copy when both have one. Moving the kernel from testing to stable must not
+# look, to the watcher, as if testing had lost it.
+VIEWS = {
+    "stable": [COMMUNITY_DB.format(branch="stable")],
+    "testing": [COMMUNITY_DB.format(branch="stable"), COMMUNITY_DB.format(branch="testing")],
+}
+
+# The branch stable modules are built from when stable's kernel is older than
+# the PKGBUILD on main. build-package checks out branches by name, and falls
+# back to main when the name does not exist, so it has to be a real branch.
+STABLE_REF = "linux-big-stable"
+
+
 def log(message):
     print(message, flush=True)
 
@@ -118,22 +134,75 @@ def read_database(data):
     return versions
 
 
-def pkgbuild_value(path, key):
-    with open(path, encoding="utf-8") as pkgbuild:
-        match = re.search(rf"^{key}=(\S+)\s*$", pkgbuild.read(), re.MULTILINE)
+class Tree:
+    """The repository's files: as checked out, or as they were at a commit."""
+
+    def __init__(self, root, commit=None):
+        self.root, self.commit = root, commit
+
+    def read(self, relative):
+        if self.commit is None:
+            with open(os.path.join(self.root, relative), encoding="utf-8") as source:
+                return source.read()
+        return subprocess.run(
+            ["git", "-C", self.root, "show", f"{self.commit}:{relative}"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+
+
+def text_value(text, key, where):
+    match = re.search(rf"^{key}=(\S+)\s*$", text, re.MULTILINE)
     if not match:
-        raise SystemExit(f"{path}: no literal {key}=")
+        raise SystemExit(f"{where}: no literal {key}=")
     return match.group(1).strip("'\"")
 
 
+def pkgbuild_value(path, key):
+    with open(path, encoding="utf-8") as pkgbuild:
+        return text_value(pkgbuild.read(), key, path)
+
+
+def kernel_version(text, where="linux-big/PKGBUILD"):
+    return f"{text_value(text, 'pkgver', where)}-{text_value(text, 'pkgrel', where)}"
+
+
+def find_commit(root, kernel):
+    """The newest commit on this branch whose linux-big PKGBUILD is `kernel`.
+
+    The last state of the repository for that kernel: what its modules were
+    built from, with every module fix made before the next kernel.
+    """
+    try:
+        commits = subprocess.run(
+            ["git", "-C", root, "rev-list", "--first-parent", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    for commit in commits:
+        try:
+            text = Tree(root, commit).read("linux-big/PKGBUILD")
+        except subprocess.CalledProcessError:
+            continue
+        try:
+            if kernel_version(text) == kernel:
+                return commit
+        except SystemExit:
+            continue
+    return None
+
+
 def rebuild_suffix(path, kernel):
+    with open(path, encoding="utf-8") as pkgbuild:
+        return rebuild_suffix_text(pkgbuild.read(), kernel)
+
+
+def rebuild_suffix_text(text, kernel):
     """".N" when the module PKGBUILD sets _rebuild=N for this kernel, else "".
 
     Mirrors _pkgrel() in the module PKGBUILDs: a rebuild for the same kernel
     and driver gets a new version, and a new kernel drops it by itself.
     """
-    with open(path, encoding="utf-8") as pkgbuild:
-        text = pkgbuild.read()
     values = {}
     for key in ("_rebuild_for", "_rebuild"):
         match = re.search(rf"^{key}=(\S*)\s*$", text, re.MULTILINE)
@@ -174,20 +243,36 @@ def version_key(version):
     return tuple(int(part) for part in pkgver.split(".")), int(pkgrel or 0)
 
 
-def plan(root, fetch_database):
-    """Return the builds to dispatch as (branch, manjaro_branch, module, expected)."""
-    kernel_pkgbuild = os.path.join(root, "linux-big", "PKGBUILD")
-    pkgver = pkgbuild_value(kernel_pkgbuild, "pkgver")
-    pkgrel = pkgbuild_value(kernel_pkgbuild, "pkgrel")
-    kernel = f"{pkgver}-{pkgrel}"
-    rel = kernel_rel(pkgver, pkgrel)
-    log(f"linux-big in the repository: {kernel} (module pkgrel {rel})")
+def plan(root, fetch_database, refs=None, find=find_commit):
+    """Return the builds to dispatch as (branch, manjaro_branch, module, expected).
+
+    When stable's kernel is older than the PKGBUILD, its modules are planned
+    from the commit that described that kernel, and refs["stable"] is set to
+    it: the builds have to run from there.
+    """
+    head = Tree(root)
+    kernel = kernel_version(head.read("linux-big/PKGBUILD"))
+    log(f"linux-big in the repository: {kernel} (module pkgrel {kernel_rel(*kernel.split('-'))})")
 
     builds = []
-    for branch, (manjaro_branch, ours_url, search) in BRANCHES.items():
-        ours = fetch_database(ours_url)
+    for branch, (manjaro_branch, _published_to, search) in BRANCHES.items():
+        ours = {}
+        for url in VIEWS[branch]:
+            ours.update(fetch_database(url))
         published = ours.get("linux-big")
-        if published != kernel:
+
+        tree, branch_kernel = head, kernel
+        if branch not in KERNEL_BRANCHES and published is not None and published != kernel:
+            commit = find(root, published)
+            if commit is None:
+                log(f"[{branch}] linux-big {published}: no commit describes it; its modules are not followed")
+                continue
+            tree, branch_kernel = Tree(root, commit), published
+            if refs is not None:
+                refs[branch] = commit
+            log(f"[{branch}] linux-big {published} is behind the PKGBUILD; modules from {commit[:12]}")
+
+        if published != branch_kernel:
             # The kernel watcher only commits the new version; building it is
             # decided here, from what is published, so a dispatch that failed
             # is retried on the next run instead of being forgotten.
@@ -197,17 +282,24 @@ def plan(root, fetch_database):
             else:
                 log(f"[{branch}] linux-big {kernel} is not published (found {published}); modules wait for it")
             continue
+
+        rel = kernel_rel(*branch_kernel.split("-"))
         for module, source in MODULES.items():
+            where = f"{module}/PKGBUILD"
+            try:
+                text = tree.read(where)
+            except (OSError, subprocess.CalledProcessError):
+                log(f"[{branch}] {module}: not in the repository for linux-big {branch_kernel}, skipped")
+                continue
             if source is None:
-                driver = pkgbuild_value(os.path.join(root, module, "PKGBUILD"), "pkgver")
+                driver = text_value(text, "pkgver", where)
             else:
                 found = first_in(search, source, fetch_database)
                 if found is None:
                     log(f"[{branch}] {module}: {source} is in none of the {branch} repositories, skipped")
                     continue
                 driver = without_pkgrel(found)
-            suffix = rebuild_suffix(os.path.join(root, module, "PKGBUILD"), kernel)
-            expected = f"{driver}-{rel}{suffix}"
+            expected = f"{driver}-{rel}{rebuild_suffix_text(text, branch_kernel)}"
             current = ours.get(module)
             if current == expected:
                 log(f"[{branch}] {module} {expected}: up to date")
@@ -217,10 +309,10 @@ def plan(root, fetch_database):
     return builds
 
 
-def payload(branch, manjaro_branch, module):
+def payload(branch, manjaro_branch, module, ref="main"):
     """The dispatch gitrepo sends for a package, pointed at one directory."""
     data = {
-        "branch": "main",
+        "branch": ref,
         "branch_type": branch,
         "build_env": "normal",
         "url": REPOSITORY_URL,
@@ -307,6 +399,12 @@ def wait_for_kernel(expected, published, in_flight, sleep=time.sleep, now=time.m
         sleep(poll)
 
 
+def point_branch(root, name, commit):
+    """Make branch `name` on GitHub point at `commit`, for build-package."""
+    subprocess.run(["git", "-C", root, "push", "--force", "origin", f"{commit}:refs/heads/{name}"], check=True)
+    log(f"branch {name} -> {commit[:12]}")
+
+
 def save_state(path, state):
     with open(path, "w", encoding="utf-8") as out:
         json.dump(state, out, indent=2, sort_keys=True)
@@ -339,7 +437,8 @@ def main():
             cache[url] = read_database(fetch(url))
         return cache[url]
 
-    builds = plan(args.root, fetch_database)
+    refs = {}
+    builds = plan(args.root, fetch_database, refs=refs)
 
     try:
         state = json.load(open(args.state, encoding="utf-8"))
@@ -353,12 +452,19 @@ def main():
     token = os.environ.get("DISPATCH_TOKEN", "")
     active = building(token) if todo and token and not args.dry_run else set()
     dispatched = 0
+    pointed = set()
     for branch, manjaro_branch, module, expected in todo:
         if module in active:
             log(f"[{branch}] {module}: a build of it is already queued or running, not dispatched again")
             continue
         key = state_key(branch, manjaro_branch, module, expected)
-        body = payload(branch, manjaro_branch, module)
+        ref = "main"
+        if branch in refs:
+            ref = STABLE_REF
+            if branch not in pointed and not args.dry_run:
+                point_branch(args.root, STABLE_REF, refs[branch])
+            pointed.add(branch)
+        body = payload(branch, manjaro_branch, module, ref)
         if args.dry_run:
             log(f"[{branch}] would dispatch {module}: {json.dumps(body['client_payload'])}")
             continue

@@ -224,6 +224,19 @@ does the same when kernel.org marks the series end of life.
 Three decisions stay with a person: moving a kernel from testing to stable,
 moving to the next series (7.3), and refreshing a patch that stopped applying.
 
+### Moving a kernel to stable
+
+Move the kernel, its headers and all its modules together (Repo-Management's
+"move" moves the files as they are, nothing is rebuilt). After that:
+
+- testing is seen as its users see it, with stable underneath: the watcher
+  does not take the kernel's absence from testing for a missing build;
+- the next kernel still goes to testing by itself, over stable's;
+- stable's modules keep following Manjaro stable's drivers. When stable's
+  kernel is older than the PKGBUILD on main, the watcher finds the commit
+  that described it, points the `linux-big-stable` branch there and builds
+  the modules from it.
+
 ## NVIDIA and other kernel modules
 
 Like the Manjaro kernels, linux-big has prebuilt modules, installed by mhwd
