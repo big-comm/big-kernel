@@ -29,6 +29,7 @@ import time
 import urllib.request
 
 REPOSITORY_URL = "https://github.com/big-comm/big-kernel"
+USER_AGENT = f"big-kernel-watch/1 (+{REPOSITORY_URL})"
 WORKFLOW_REPOSITORY = "big-comm/build-package"
 
 # Module directory -> the Manjaro package its driver version follows, or None
@@ -94,7 +95,7 @@ def log(message):
 
 def fetch(url):
     # repo.communitybig.org refuses urllib's default User-Agent.
-    request = urllib.request.Request(url, headers={"User-Agent": "big-kernel-watch/1 (+%s)" % REPOSITORY_URL})
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=120) as response:
         return response.read()
 
@@ -260,6 +261,52 @@ def dispatch(token, body):
         return response.status
 
 
+def building(token):
+    """Packages build-package is building or has queued right now.
+
+    A second guard besides the dispatch state: the state lives in the
+    Actions cache, which a re-run or an eviction can lose, and a kernel
+    dispatched twice is built twice, four hours each.
+    """
+    names = set()
+    for status in ("queued", "in_progress", "waiting", "pending"):
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": USER_AGENT,
+        }
+        if token:  # build-package is public: listing its runs works without one too
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{WORKFLOW_REPOSITORY}/actions/runs?status={status}&per_page=100",
+            headers=headers,
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            runs = json.load(response).get("workflow_runs", [])
+        names.update(run.get("display_title", "") for run in runs)
+    return names
+
+
+def wait_for_kernel(expected, published, in_flight, sleep=time.sleep, now=time.monotonic,
+                    minutes=330, poll=300, grace=1200):
+    """Wait until linux-big `expected` is published in testing.
+
+    Returns "published", "failed" when build-package is no longer building
+    it and it is not published (after `grace` seconds, the time a dispatch
+    takes to show up as a run), or "timeout".
+    """
+    start = now()
+    while True:
+        if published() == expected:
+            return "published"
+        waited = now() - start
+        if waited >= grace and not in_flight():
+            return "failed"
+        if waited >= minutes * 60:
+            return "timeout"
+        sleep(poll)
+
+
 def save_state(path, state):
     with open(path, "w", encoding="utf-8") as out:
         json.dump(state, out, indent=2, sort_keys=True)
@@ -271,7 +318,19 @@ def main():
     parser.add_argument("--state", default="watch-state.json", help="builds already dispatched")
     parser.add_argument("--dry-run", action="store_true", help="report, dispatch nothing")
     parser.add_argument("--force", action="store_true", help="dispatch even what was dispatched before")
+    parser.add_argument("--wait-for-kernel", metavar="VERSION", help="wait until this linux-big is in testing")
     args = parser.parse_args()
+
+    if args.wait_for_kernel:
+        token = os.environ.get("DISPATCH_TOKEN", "")
+        testing = BRANCHES["testing"][1]
+        result = wait_for_kernel(
+            args.wait_for_kernel,
+            published=lambda: read_database(fetch(testing)).get("linux-big"),
+            in_flight=lambda: "linux-big" in building(token),
+        )
+        log(f"linux-big {args.wait_for_kernel}: {result}")
+        return 0 if result == "published" else 1
 
     cache = {}
 
@@ -292,8 +351,12 @@ def main():
             log(f"[{build[0]}] {build[2]} {build[3]}: already dispatched at {state[state_key(*build)]}, not again")
 
     token = os.environ.get("DISPATCH_TOKEN", "")
+    active = building(token) if todo and token and not args.dry_run else set()
     dispatched = 0
     for branch, manjaro_branch, module, expected in todo:
+        if module in active:
+            log(f"[{branch}] {module}: a build of it is already queued or running, not dispatched again")
+            continue
         key = state_key(branch, manjaro_branch, module, expected)
         body = payload(branch, manjaro_branch, module)
         if args.dry_run:
@@ -305,6 +368,13 @@ def main():
         log(f"[{branch}] dispatched {module} {expected} (HTTP {status})")
         state[key] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         dispatched += 1
+        if module == "linux-big":
+            # The workflow waits for it and then runs this watcher again, so
+            # the modules follow the kernel instead of the next schedule.
+            output = os.environ.get("GITHUB_OUTPUT")
+            if output:
+                with open(output, "a", encoding="utf-8") as out:
+                    out.write(f"kernel={expected}\n")
         # Saved after each one: if a later dispatch fails, the ones already
         # sent are not sent again.
         save_state(args.state, state)

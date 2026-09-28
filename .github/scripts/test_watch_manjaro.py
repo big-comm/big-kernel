@@ -235,6 +235,93 @@ class Dedupe(unittest.TestCase):
         self.assertEqual(watch.pending([newer], state), [newer])
 
 
+class InFlight(unittest.TestCase):
+    """A package build-package is already building is not dispatched again."""
+
+    def run_main(self, active, builds):
+        import tempfile
+        sent = []
+        state_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        state_file.write("{}")
+        state_file.close()
+        self.addCleanup(os.unlink, state_file.name)
+        saved = (watch.plan, watch.building, watch.dispatch, sys.argv, os.environ.get("DISPATCH_TOKEN"))
+        watch.plan = lambda root, fetch: builds
+        watch.building = lambda token: active
+        watch.dispatch = lambda token, body: sent.append(body["event_type"]) or 204
+        sys.argv = ["watch_manjaro.py", "--state", state_file.name]
+        os.environ["DISPATCH_TOKEN"] = "x"
+        github_output = os.environ.pop("GITHUB_OUTPUT", None)
+        if github_output is not None:
+            self.addCleanup(os.environ.__setitem__, "GITHUB_OUTPUT", github_output)
+        try:
+            watch.main()
+        finally:
+            watch.plan, watch.building, watch.dispatch, sys.argv = saved[:4]
+            if saved[4] is None:
+                del os.environ["DISPATCH_TOKEN"]
+            else:
+                os.environ["DISPATCH_TOKEN"] = saved[4]
+        return sent
+
+    def setUp(self):
+        watch.log = lambda _message: None
+
+    def test_a_kernel_being_built_is_not_dispatched_again(self):
+        # What happened with 7.2.8: the dispatch state was lost on a re-run
+        # and the next run sent a second four-hour build.
+        builds = [("testing", "testing", "linux-big", "7.2.8-1")]
+        self.assertEqual(self.run_main({"linux-big"}, builds), [])
+
+    def test_only_the_packages_in_flight_are_skipped(self):
+        builds = [
+            ("testing", "testing", "linux-big-nvidia", "615.71.09-7020801"),
+            ("testing", "testing", "linux-big-zfs", "2.4.4-7020801"),
+        ]
+        self.assertEqual(self.run_main({"linux-big-nvidia"}, builds), ["linux-big-zfs"])
+
+    def test_nothing_in_flight_dispatches_everything(self):
+        builds = [("testing", "testing", "linux-big", "7.2.8-1")]
+        self.assertEqual(self.run_main(set(), builds), ["linux-big"])
+
+
+class WaitForKernel(unittest.TestCase):
+    """The modules follow the kernel as soon as it is published."""
+
+    def run_wait(self, published, in_flight, **limits):
+        clock = {"t": 0}
+        states = iter(published)
+        last = {"v": None}
+
+        def get_published():
+            last["v"] = next(states, last["v"])
+            return last["v"]
+
+        def sleep(seconds):
+            clock["t"] += seconds
+
+        return watch.wait_for_kernel("7.2.8-1", get_published, lambda: in_flight(clock["t"]),
+                                     sleep=sleep, now=lambda: clock["t"], **limits)
+
+    def test_published_after_a_while(self):
+        result = self.run_wait(["7.2.7-2"] * 40 + ["7.2.8-1"], lambda t: True)
+        self.assertEqual(result, "published")
+
+    def test_a_failed_build_is_reported_not_waited_for(self):
+        # Nothing building any more and the kernel never appeared.
+        result = self.run_wait(["7.2.7-2"] * 1000, lambda t: t < 3600)
+        self.assertEqual(result, "failed")
+
+    def test_the_dispatch_gets_time_to_show_up_as_a_run(self):
+        # Right after the dispatch build-package has no run yet: not a failure.
+        result = self.run_wait(["7.2.7-2"] * 3 + ["7.2.8-1"], lambda t: False)
+        self.assertEqual(result, "published")
+
+    def test_gives_up_after_the_limit(self):
+        result = self.run_wait(["7.2.7-2"] * 10000, lambda t: True, minutes=60)
+        self.assertEqual(result, "timeout")
+
+
 class Payload(unittest.TestCase):
     def test_matches_what_build_package_reads(self):
         body = watch.payload("testing", "testing", "linux-big-nvidia-open")
