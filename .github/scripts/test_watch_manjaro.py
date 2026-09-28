@@ -353,6 +353,18 @@ class StableDispatch(unittest.TestCase):
         ])
 
 
+class PointBranch(unittest.TestCase):
+    def test_only_a_full_commit_hash_is_pushed(self):
+        for commit in ("abc123", "HEAD", "main", "--force", "0" * 39 + "; rm -rf /"):
+            with self.subTest(commit=commit), self.assertRaises(ValueError):
+                watch.point_branch(".", watch.STABLE_REF, commit)
+
+    def test_a_pkgbuild_without_a_version_is_reported_by_name(self):
+        with self.assertRaises(watch.PkgbuildError) as raised:
+            watch.kernel_version("pkgname=linux-big\n")
+        self.assertIn("linux-big/PKGBUILD", str(raised.exception))
+
+
 class InFlight(unittest.TestCase):
     """A package build-package is already building is not dispatched again."""
 

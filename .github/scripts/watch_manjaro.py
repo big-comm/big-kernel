@@ -104,6 +104,12 @@ VIEWS = {
 # back to main when the name does not exist, so it has to be a real branch.
 STABLE_REF = "linux-big-stable"
 
+KERNEL_PKGBUILD = "linux-big/PKGBUILD"
+
+
+class PkgbuildError(Exception):
+    """A PKGBUILD without a value the watcher needs, such as a literal pkgver."""
+
 
 def log(message):
     print(message, flush=True)
@@ -153,7 +159,7 @@ class Tree:
 def text_value(text, key, where):
     match = re.search(rf"^{key}=(\S+)\s*$", text, re.MULTILINE)
     if not match:
-        raise SystemExit(f"{where}: no literal {key}=")
+        raise PkgbuildError(f"{where}: no literal {key}=")
     return match.group(1).strip("'\"")
 
 
@@ -162,7 +168,7 @@ def pkgbuild_value(path, key):
         return text_value(pkgbuild.read(), key, path)
 
 
-def kernel_version(text, where="linux-big/PKGBUILD"):
+def kernel_version(text, where=KERNEL_PKGBUILD):
     return f"{text_value(text, 'pkgver', where)}-{text_value(text, 'pkgrel', where)}"
 
 
@@ -181,14 +187,10 @@ def find_commit(root, kernel):
         return None
     for commit in commits:
         try:
-            text = Tree(root, commit).read("linux-big/PKGBUILD")
-        except subprocess.CalledProcessError:
-            continue
-        try:
-            if kernel_version(text) == kernel:
+            if kernel_version(Tree(root, commit).read(KERNEL_PKGBUILD)) == kernel:
                 return commit
-        except SystemExit:
-            continue
+        except (subprocess.CalledProcessError, PkgbuildError):
+            continue  # a commit before linux-big, or one without a literal version
     return None
 
 
@@ -243,6 +245,48 @@ def version_key(version):
     return tuple(int(part) for part in pkgver.split(".")), int(pkgrel or 0)
 
 
+def branch_view(branch, fetch_database):
+    """BigCommunity's own packages as a user of `branch` sees them."""
+    ours = {}
+    for url in VIEWS[branch]:
+        ours.update(fetch_database(url))
+    return ours
+
+
+def kernel_behind(branch, kernel, published):
+    """Whether the PKGBUILD's kernel should be built for `branch`."""
+    return branch in KERNEL_BRANCHES and (published is None or version_key(kernel) > version_key(published))
+
+
+def module_builds(branch, manjaro_branch, search, tree, branch_kernel, ours, fetch_database):
+    """The modules of `branch` behind the drivers its users get."""
+    rel = kernel_rel(*branch_kernel.split("-"))
+    builds = []
+    for module, source in MODULES.items():
+        where = f"{module}/PKGBUILD"
+        try:
+            text = tree.read(where)
+        except (OSError, subprocess.CalledProcessError):
+            log(f"[{branch}] {module}: not in the repository for linux-big {branch_kernel}, skipped")
+            continue
+        if source is None:
+            driver = text_value(text, "pkgver", where)
+        else:
+            found = first_in(search, source, fetch_database)
+            if found is None:
+                log(f"[{branch}] {module}: {source} is in none of the {branch} repositories, skipped")
+                continue
+            driver = without_pkgrel(found)
+        expected = f"{driver}-{rel}{rebuild_suffix_text(text, branch_kernel)}"
+        current = ours.get(module)
+        if current == expected:
+            log(f"[{branch}] {module} {expected}: up to date")
+        else:
+            log(f"[{branch}] {module}: published {current}, expected {expected}")
+            builds.append((branch, manjaro_branch, module, expected))
+    return builds
+
+
 def plan(root, fetch_database, refs=None, find=find_commit):
     """Return the builds to dispatch as (branch, manjaro_branch, module, expected).
 
@@ -251,14 +295,12 @@ def plan(root, fetch_database, refs=None, find=find_commit):
     it: the builds have to run from there.
     """
     head = Tree(root)
-    kernel = kernel_version(head.read("linux-big/PKGBUILD"))
+    kernel = kernel_version(head.read(KERNEL_PKGBUILD))
     log(f"linux-big in the repository: {kernel} (module pkgrel {kernel_rel(*kernel.split('-'))})")
 
     builds = []
     for branch, (manjaro_branch, _published_to, search) in BRANCHES.items():
-        ours = {}
-        for url in VIEWS[branch]:
-            ours.update(fetch_database(url))
+        ours = branch_view(branch, fetch_database)
         published = ours.get("linux-big")
 
         tree, branch_kernel = head, kernel
@@ -272,40 +314,16 @@ def plan(root, fetch_database, refs=None, find=find_commit):
                 refs[branch] = commit
             log(f"[{branch}] linux-big {published} is behind the PKGBUILD; modules from {commit[:12]}")
 
-        if published != branch_kernel:
+        if published == branch_kernel:
+            builds += module_builds(branch, manjaro_branch, search, tree, branch_kernel, ours, fetch_database)
+        elif kernel_behind(branch, kernel, published):
             # The kernel watcher only commits the new version; building it is
             # decided here, from what is published, so a dispatch that failed
             # is retried on the next run instead of being forgotten.
-            if branch in KERNEL_BRANCHES and (published is None or version_key(kernel) > version_key(published)):
-                log(f"[{branch}] linux-big: published {published}, PKGBUILD is {kernel}; building it")
-                builds.append((branch, manjaro_branch, "linux-big", kernel))
-            else:
-                log(f"[{branch}] linux-big {kernel} is not published (found {published}); modules wait for it")
-            continue
-
-        rel = kernel_rel(*branch_kernel.split("-"))
-        for module, source in MODULES.items():
-            where = f"{module}/PKGBUILD"
-            try:
-                text = tree.read(where)
-            except (OSError, subprocess.CalledProcessError):
-                log(f"[{branch}] {module}: not in the repository for linux-big {branch_kernel}, skipped")
-                continue
-            if source is None:
-                driver = text_value(text, "pkgver", where)
-            else:
-                found = first_in(search, source, fetch_database)
-                if found is None:
-                    log(f"[{branch}] {module}: {source} is in none of the {branch} repositories, skipped")
-                    continue
-                driver = without_pkgrel(found)
-            expected = f"{driver}-{rel}{rebuild_suffix_text(text, branch_kernel)}"
-            current = ours.get(module)
-            if current == expected:
-                log(f"[{branch}] {module} {expected}: up to date")
-            else:
-                log(f"[{branch}] {module}: published {current}, expected {expected}")
-                builds.append((branch, manjaro_branch, module, expected))
+            log(f"[{branch}] linux-big: published {published}, PKGBUILD is {kernel}; building it")
+            builds.append((branch, manjaro_branch, "linux-big", kernel))
+        else:
+            log(f"[{branch}] linux-big {kernel} is not published (found {published}); modules wait for it")
     return builds
 
 
@@ -401,6 +419,10 @@ def wait_for_kernel(expected, published, in_flight, sleep=time.sleep, now=time.m
 
 def point_branch(root, name, commit):
     """Make branch `name` on GitHub point at `commit`, for build-package."""
+    # `commit` comes from git rev-list, `name` is STABLE_REF; checked anyway,
+    # since both end up in a git command line.
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        raise ValueError(f"refusing to point {name!r} at {commit!r}")
     subprocess.run(["git", "-C", root, "push", "--force", "origin", f"{commit}:refs/heads/{name}"], check=True)
     log(f"branch {name} -> {commit[:12]}")
 
@@ -491,4 +513,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except PkgbuildError as error:
+        sys.exit(f"error: {error}")
