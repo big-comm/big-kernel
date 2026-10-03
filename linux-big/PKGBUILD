@@ -19,7 +19,7 @@
 
 _basekernel=7.2
 pkgbase=linux-big
-pkgver=7.2.8
+pkgver=7.2.9
 pkgrel=1
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
@@ -115,7 +115,7 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         0103-drm-xe-Implement-Wa_22016122933.patch
 )
 sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
-            'b509067e26487f23795b30640bbfdff0afba0c48290f1100fe880c9bdf369776'
+            '2e2d0cb6764865726c37315e04ddfc405553bf9ac59929a72e037591d75fd21a'
             '0d7a55d95acde5c76da3bdc184030b9799b27be1422fbb4833349382d0864467'
             'e5e98d62b63704cecdf32dbe6a9bafea6e70b23fa8e01fe96ca220ac6036392e'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
