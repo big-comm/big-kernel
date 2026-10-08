@@ -1,0 +1,18 @@
+# Points depmod at the build of linux-big-nvidia that matches the
+# installed nvidia-utils: after 60-depmod, before mkinitcpio and dkms.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/modules/*/extramodules/linux-big-nvidia/*
+
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = nvidia-utils
+
+[Action]
+Description = Selecting the linux-big-nvidia build for nvidia-utils...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/linux-big-nvidia-select linux-big-nvidia

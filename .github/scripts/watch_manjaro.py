@@ -14,6 +14,11 @@ Nothing is edited: the module PKGBUILDs read the driver version from pacman
 and the kernel version from ../linux-big/PKGBUILD when they build, so a build
 dispatched from the current repository always produces the expected version.
 
+The NVIDIA modules also build for the driver of Manjaro testing, whose users
+get a newer nvidia-utils than stable's: while the two differ, the package
+carries both builds and its version names both drivers, stable's first
+(610.57.04+615.71.09).
+
 A module is only dispatched on a branch once linux-big itself is published
 there, since the build needs linux-big-headers of that exact version.
 """
@@ -69,8 +74,8 @@ BIGLINUX_DB = "https://repo.biglinux.com.br/{branch}/x86_64/biglinux-{branch}.db
 # made the watcher dispatch builds that came out with the old driver, record
 # the new version as done, and then never rebuild it once Manjaro stable got
 # that driver: community-testing kept a module older than nvidia-utils.
-# Users of community-testing on Manjaro testing still wait, while Manjaro
-# testing is ahead, for the driver to reach stable.
+# The modules whose PKGBUILD also builds for Manjaro testing's driver
+# (TESTING_MARK) follow that one too, in both branches: see module_driver().
 BRANCHES = {
     "stable": (
         "stable",
@@ -97,6 +102,13 @@ BRANCHES = {
         ],
     ),
 }
+
+
+# A module PKGBUILD that builds for Manjaro testing's driver as well as for
+# stable's has this line; one from before that change does not, and the
+# stable branch can still be built from such a commit.
+TESTING_MARK = re.compile(r"^_manjaro_testing=", re.MULTILINE)
+MANJARO_TESTING_DB = MANJARO_DB.format(branch="testing")
 
 
 # What a user of each branch sees of BigCommunity's own packages, lowest
@@ -267,6 +279,29 @@ def kernel_behind(branch, kernel, published):
     return branch in KERNEL_BRANCHES and (published is None or version_key(kernel) > version_key(published))
 
 
+def module_driver(text, source, search, fetch_database):
+    """The driver part of a module's version, as its PKGBUILD computes it.
+
+    The driver users of this branch get; for a module that also builds for
+    Manjaro testing's driver, "stable+testing" while the one users on Manjaro
+    testing get -- the same repositories, Manjaro testing in place of stable
+    -- differs. None when a driver is missing.
+    """
+    found = first_in(search, source, fetch_database)
+    if found is None:
+        return None
+    driver = without_pkgrel(found)
+    if TESTING_MARK.search(text):
+        manjaro_stable = MANJARO_DB.format(branch="stable")
+        testing_search = [MANJARO_TESTING_DB if url == manjaro_stable else url for url in search]
+        testing = first_in(testing_search, source, fetch_database)
+        if testing is None:
+            return None
+        if without_pkgrel(testing) != driver:
+            driver = f"{driver}+{without_pkgrel(testing)}"
+    return driver
+
+
 def module_builds(branch, manjaro_branch, search, tree, branch_kernel, ours, fetch_database):
     """The modules of `branch` behind the drivers its users get."""
     rel = kernel_rel(*branch_kernel.split("-"))
@@ -281,11 +316,10 @@ def module_builds(branch, manjaro_branch, search, tree, branch_kernel, ours, fet
         if source is None:
             driver = text_value(text, "pkgver", where)
         else:
-            found = first_in(search, source, fetch_database)
-            if found is None:
-                log(f"[{branch}] {module}: {source} is in none of the {branch} repositories, skipped")
+            driver = module_driver(text, source, search, fetch_database)
+            if driver is None:
+                log(f"[{branch}] {module}: {source} is missing from the {branch} repositories or Manjaro testing, skipped")
                 continue
-            driver = without_pkgrel(found)
         expected = f"{driver}-{rel}{rebuild_suffix_text(text, branch_kernel)}"
         current = ours.get(module)
         if current == expected:

@@ -1,0 +1,11 @@
+# Removes the depmod override before the package goes: once it is gone, its
+# PostTransaction hook would not run any more.
+[Trigger]
+Type = Path
+Operation = Remove
+Target = usr/lib/modules/*/extramodules/linux-big-nvidia/*
+
+[Action]
+Description = Removing the linux-big-nvidia depmod override...
+When = PreTransaction
+Exec = /usr/share/libalpm/scripts/linux-big-nvidia-select linux-big-nvidia --remove

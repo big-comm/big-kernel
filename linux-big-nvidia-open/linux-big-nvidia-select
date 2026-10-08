@@ -1,0 +1,59 @@
+#!/bin/bash
+#
+# linux-big-nvidia-select PACKAGE [--remove]
+#
+# A linux-big NVIDIA module package carries one build per NVIDIA driver in use
+# by the Manjaro branches -- stable and testing -- under
+# /usr/lib/modules/<kernel>/extramodules/PACKAGE/<driver>/. Only the build of
+# the installed nvidia-utils can load, so this points depmod at it with an
+# override in /etc/depmod.d/PACKAGE.conf, then refreshes the module index and,
+# when the choice changed and the initramfs carries the NVIDIA modules, the
+# initramfs. (A new build of the package regenerates the initramfs by itself:
+# mkinitcpio's hook watches extramodules.)
+#
+# Run by the package's pacman hooks: after the package or nvidia-utils is
+# installed or upgraded, and with --remove before the package is removed.
+
+set -u
+
+package=${1:?usage: linux-big-nvidia-select PACKAGE [--remove]}
+conf=/etc/depmod.d/$package.conf
+
+if [[ ${2:-} == --remove ]]; then
+  rm -f "$conf"
+  exit 0
+fi
+
+before=$(cat "$conf" 2>/dev/null)
+driver=$(LC_ALL=C pacman -Q nvidia-utils 2>/dev/null | awk '{ sub(/-[^-]*$/, "", $2); print $2 }')
+
+builds=()
+for build in /usr/lib/modules/*-big/extramodules/"$package"/"$driver"; do
+  [[ -n $driver && -d $build ]] && builds+=("$build")
+done
+
+if ((${#builds[@]})); then
+  {
+    echo "# Written by linux-big-nvidia-select: the $package build for nvidia-utils $driver."
+    for module in "${builds[0]}"/*.ko*; do
+      module=${module##*/}
+      echo "override ${module%%.ko*} * extramodules/$package/$driver"
+    done
+  } > "$conf"
+else
+  rm -f "$conf"
+  echo "==> WARNING: $package has no build for nvidia-utils ${driver:-(not installed)};"
+  echo "    the NVIDIA driver will not load until $package is updated."
+fi
+
+for kernel in /usr/lib/modules/*-big; do
+  [[ -e $kernel/modules.order ]] && depmod "${kernel##*/}"
+done
+
+if [[ $(cat "$conf" 2>/dev/null) != "$before" ]] &&
+   grep -Eqs '^[[:space:]]*MODULES[+]?=.*nvidia' /etc/mkinitcpio.conf /etc/mkinitcpio.conf.d/*.conf &&
+   [[ -e /etc/mkinitcpio.d/linux-big.preset ]]; then
+  mkinitcpio -p linux-big
+fi
+
+exit 0
