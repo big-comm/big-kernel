@@ -39,12 +39,21 @@ def suffix(module):
     return watch.rebuild_suffix(os.path.join(ROOT, module, "PKGBUILD"), KERNEL)
 
 
-def up_to_date(manjaro):
+def builds_testing_too(module):
+    """Whether the module's PKGBUILD also builds for Manjaro testing's driver."""
+    with open(os.path.join(ROOT, module, "PKGBUILD"), encoding="utf-8") as pkgbuild:
+        return bool(watch.TESTING_MARK.search(pkgbuild.read()))
+
+
+def up_to_date(manjaro, testing=None):
     """What BigCommunity has published when every module matches."""
     ours = {"linux-big": KERNEL}
     for module, source in watch.MODULES.items():
         if source:
-            ours[module] = f"{watch.without_pkgrel(manjaro[source])}-{REL}{suffix(module)}"
+            driver = watch.without_pkgrel(manjaro[source])
+            if testing and builds_testing_too(module) and watch.without_pkgrel(testing[source]) != driver:
+                driver += "+" + watch.without_pkgrel(testing[source])
+            ours[module] = f"{driver}-{REL}{suffix(module)}"
         else:
             ours[module] = f"{watch.pkgbuild_value(os.path.join(ROOT, module, 'PKGBUILD'), 'pkgver')}-{REL}{suffix(module)}"
     return ours
@@ -114,12 +123,40 @@ class Plan(unittest.TestCase):
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), up_to_date(MANJARO)))
         self.assertEqual(builds, [])
 
-    def test_a_new_driver_in_manjaro_testing_alone_builds_nothing(self):
-        # build-package builds against Manjaro stable: a module "for" Manjaro
-        # testing's driver would come out with stable's, so none is dispatched.
-        newer = dict(MANJARO, **{"nvidia-open-dkms": "615.10.02-1", "nvidia-dkms": "615.10.02-1"})
+    def test_a_new_driver_in_manjaro_testing_adds_a_build_for_it(self):
+        # 2026-10-08: Manjaro testing got NVIDIA 615, stable kept 610, and
+        # pacman refused linux-big-nvidia-open (nvidia-utils=610.57.04) to
+        # Manjaro testing users. The NVIDIA modules now carry both builds.
+        newer = dict(MANJARO, **{"nvidia-open-dkms": "615.71.09-2", "nvidia-dkms": "615.71.09-2",
+                                 "virtualbox-host-dkms": "7.2.20-1"})
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), up_to_date(MANJARO), testing_manjaro=newer))
-        self.assertEqual(builds, [])
+        for branch in ("stable", "testing"):
+            self.assertEqual(modules(builds, branch), ["linux-big-nvidia", "linux-big-nvidia-open"])
+        self.assertEqual({e for _b, _m, _mod, e in builds}, {f"610.57.04+615.71.09-{REL}"})
+        # Built against Manjaro stable, like everything: the PKGBUILD fetches
+        # testing's driver by itself.
+        self.assertEqual({mb for _b, mb, _mod, _e in builds}, {"stable"})
+
+    def test_both_builds_published_is_up_to_date(self):
+        newer = dict(MANJARO, **{"nvidia-open-dkms": "615.71.09-2", "nvidia-dkms": "615.71.09-2"})
+        both = up_to_date(MANJARO, testing=newer)
+        self.assertEqual(both["linux-big-nvidia-open"], f"610.57.04+615.71.09-{REL}")
+        self.assertEqual(watch.plan(ROOT, databases(both, both, testing_manjaro=newer)), [])
+
+    def test_a_pkgbuild_without_the_testing_build_follows_stable_alone(self):
+        # The stable branch may be built from a commit before the change.
+        newer = {"nvidia-open-dkms": "615.71.09-2"}
+        fetch = databases({}, {}, testing_manjaro=newer)
+        search = watch.BRANCHES["stable"][2]
+        self.assertEqual(watch.module_driver("pkgver=1\n", "nvidia-open-dkms", search, fetch), "610.57.04")
+        self.assertEqual(watch.module_driver("_manjaro_testing=x\n", "nvidia-open-dkms", search, fetch),
+                         "610.57.04+615.71.09")
+
+    def test_a_driver_missing_from_manjaro_testing_is_skipped(self):
+        partial = {k: v for k, v in MANJARO.items() if k != "nvidia-dkms"}
+        builds = watch.plan(ROOT, databases({"linux-big": KERNEL}, {}, testing_manjaro=partial))
+        self.assertNotIn("linux-big-nvidia", modules(builds, "stable"))
+        self.assertIn("linux-big-nvidia-open", modules(builds, "stable"))
 
     def test_a_new_driver_in_manjaro_stable_rebuilds_both_branches(self):
         # What 2026-10-07 needed once NVIDIA 615 reaches Manjaro stable: testing
@@ -203,6 +240,18 @@ class Rebuild(unittest.TestCase):
         self.assertEqual([(m, e) for _b, _mb, m, e in builds], [(module, f"2.4.4-{REL}{suffix(module)}")])
         self.assertEqual(watch.plan(ROOT, databases(up_to_date(MANJARO), {})), [])
 
+    def test_a_new_driver_in_either_branch_is_an_upgrade(self):
+        import subprocess
+        def vercmp(a, b):
+            return int(subprocess.run(["vercmp", a, b], capture_output=True, text=True).stdout)
+        try:
+            self.assertEqual(vercmp("610.57.04+615.71.09", "610.57.04"), 1)       # testing moves ahead
+            self.assertEqual(vercmp("610.57.04+615.80.01", "610.57.04+615.71.09"), 1)  # testing again
+            self.assertEqual(vercmp("610.60.01+615.71.09", "610.57.04+615.71.09"), 1)  # stable alone
+            self.assertEqual(vercmp("615.71.09", "610.57.04+615.71.09"), 1)       # stable catches up
+        except FileNotFoundError:
+            self.skipTest("vercmp (pacman) not installed")
+
     def test_the_suffixed_version_is_an_upgrade_until_the_next_kernel(self):
         import subprocess
         def vercmp(a, b):
@@ -257,10 +306,13 @@ class MovedToStable(unittest.TestCase):
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {}))
         self.assertEqual(builds, [])
 
-    def test_a_newer_driver_only_in_manjaro_testing_builds_nothing(self):
+    def test_a_newer_driver_only_in_manjaro_testing_builds_both_drivers(self):
         newer = dict(MANJARO, **{"nvidia-open-dkms": "615.71.09-1"})
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {}, testing_manjaro=newer))
-        self.assertEqual(builds, [])
+        self.assertEqual(sorted(builds), [
+            (branch, "stable", "linux-big-nvidia-open", f"610.57.04+615.71.09-{REL}")
+            for branch in ("stable", "testing")
+        ])
 
 
 class StableBehindMain(unittest.TestCase):
@@ -296,7 +348,8 @@ class StableBehindMain(unittest.TestCase):
     def test_a_new_driver_in_stable_is_built_from_stables_commit(self):
         newer = dict(MANJARO, **{"nvidia-open-dkms": "615.71.09-1"})
         refs = {}
-        builds = watch.plan(self.repo, databases(up_to_date(MANJARO), up_to_date(MANJARO), stable_manjaro=newer), refs=refs)
+        builds = watch.plan(self.repo, databases(up_to_date(MANJARO), up_to_date(MANJARO), stable_manjaro=newer,
+                                                 testing_manjaro=newer), refs=refs)
         stable = [b for b in builds if b[0] == "stable"]
         # The stable kernel's pkgrel, not main's: built against the kernel stable has.
         self.assertEqual(stable, [("stable", "stable", "linux-big-nvidia-open", f"615.71.09-{REL}")])

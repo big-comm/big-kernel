@@ -276,10 +276,18 @@ behind. The driver version is resolved the way pacman does it: from the first
 repository in the users' order that has it — BigLinux, then Manjaro, then
 BigCommunity — so a driver BigLinux publishes ahead of Manjaro is followed too.
 Both branches follow the drivers of Manjaro **stable**, the branch every
-package is built against. While a driver is newer in Manjaro testing than in
-stable, users on Manjaro testing with an NVIDIA or VirtualBox module have that
-update held back by pacman until the driver reaches Manjaro stable; for NVIDIA,
-the DKMS driver (`nvidia-open-dkms`) avoids the wait.
+package is built against.
+
+Which NVIDIA driver a machine has is decided by its Manjaro branch, not by
+BigCommunity's. So while Manjaro testing has a newer NVIDIA driver than stable,
+`linux-big-nvidia-open` and `linux-big-nvidia` carry a build for each — the
+version names both, stable's first, as in `610.57.04+615.71.09` — and a pacman
+hook points the system at the build of the installed `nvidia-utils`, through
+`/etc/depmod.d/linux-big-nvidia*.conf`. Moving between Manjaro branches
+switches the build by itself; nothing is compiled on the user's machine. Once
+both branches have the same driver, the package carries one build again.
+VirtualBox needs no such thing: its modules keep working across the 7.2
+releases.
 
 The kernel build itself checks the other direction: in the CI, `check()` builds
 the NVIDIA open driver against the new kernel, and a kernel it does not build
