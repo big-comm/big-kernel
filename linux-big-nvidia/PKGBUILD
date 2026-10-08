@@ -119,16 +119,20 @@ source=('linux-big-nvidia-select'
 sha256sums=('a9d5ef838be015f958373889964740671bcda49d8ee8677bcd36146a1d1aa966'
             'd77d62d88f30bf15a9e7e57a8bf90e5991e96bc22c104db1da251d8266a2a1a6'
             'f5ff84edc4d536edbbdc53caad4ea870b0626443cd62f3f34518c39b65e909ff')
+# Saved under a name that does not end in .pkg.tar.zst: build-package
+# publishes every *.pkg.tar.zst left in the build directory, and on
+# 2026-10-08 it published Manjaro's own dkms package to BigCommunity.
+_testing_src=manjaro-testing-${_testing_file%.pkg.tar.zst}.tar.zst
 if [[ $_testing != "$_stable" ]]; then
-  source+=("$_manjaro_testing/$_testing_file")
+  source+=("$_testing_src::$_manjaro_testing/$_testing_file")
   sha256sums+=("$_testing_sum")
-  noextract=("$_testing_file")
+  noextract=("$_testing_src")
 fi
 
 prepare() {
   if [[ $_testing != "$_stable" ]]; then
     mkdir -p testing
-    bsdtar -xf "$_testing_file" -C testing usr/src
+    bsdtar -xf "$_testing_src" -C testing usr/src
   fi
 }
 
