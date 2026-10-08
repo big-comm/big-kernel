@@ -275,7 +275,11 @@ what BigCommunity has published, and dispatches a build of every module that is
 behind. The driver version is resolved the way pacman does it: from the first
 repository in the users' order that has it — BigLinux, then Manjaro, then
 BigCommunity — so a driver BigLinux publishes ahead of Manjaro is followed too.
-A new driver is picked up in Manjaro testing, days before it reaches stable.
+Both branches follow the drivers of Manjaro **stable**, the branch every
+package is built against. While a driver is newer in Manjaro testing than in
+stable, users on Manjaro testing with an NVIDIA or VirtualBox module have that
+update held back by pacman until the driver reaches Manjaro stable; for NVIDIA,
+the DKMS driver (`nvidia-open-dkms`) avoids the wait.
 
 The kernel build itself checks the other direction: in the CI, `check()` builds
 the NVIDIA open driver against the new kernel, and a kernel it does not build

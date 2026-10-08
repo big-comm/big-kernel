@@ -90,7 +90,7 @@ class Plan(unittest.TestCase):
         # What the kernel watcher leaves behind: the PKGBUILD moved on,
         # testing still has the previous release. Modules wait for it.
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {"linux-big": "7.2.7-2"}))
-        self.assertEqual(builds, [("testing", "testing", "linux-big", KERNEL)])
+        self.assertEqual(builds, [("testing", "stable", "linux-big", KERNEL)])
 
     def test_stable_never_gets_a_kernel_by_itself(self):
         builds = watch.plan(ROOT, databases({"linux-big": "7.2.7-2"}, up_to_date(MANJARO)))
@@ -114,13 +114,23 @@ class Plan(unittest.TestCase):
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), up_to_date(MANJARO)))
         self.assertEqual(builds, [])
 
-    def test_a_new_driver_in_manjaro_testing_rebuilds_only_its_modules_there(self):
+    def test_a_new_driver_in_manjaro_testing_alone_builds_nothing(self):
+        # build-package builds against Manjaro stable: a module "for" Manjaro
+        # testing's driver would come out with stable's, so none is dispatched.
         newer = dict(MANJARO, **{"nvidia-open-dkms": "615.10.02-1", "nvidia-dkms": "615.10.02-1"})
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), up_to_date(MANJARO), testing_manjaro=newer))
+        self.assertEqual(builds, [])
+
+    def test_a_new_driver_in_manjaro_stable_rebuilds_both_branches(self):
+        # What 2026-10-07 needed once NVIDIA 615 reaches Manjaro stable: testing
+        # too, or community-testing keeps a module older than nvidia-utils.
+        newer = dict(MANJARO, **{"nvidia-open-dkms": "615.10.02-1", "nvidia-dkms": "615.10.02-1"})
+        both = up_to_date(MANJARO)
+        builds = watch.plan(ROOT, databases(both, both, stable_manjaro=newer, testing_manjaro=newer))
         self.assertEqual(modules(builds, "testing"), ["linux-big-nvidia", "linux-big-nvidia-open"])
-        self.assertEqual(modules(builds, "stable"), [])
-        expected = {e for _b, _m, _mod, e in builds}
-        self.assertEqual(expected, {f"615.10.02-{REL}"})
+        self.assertEqual(modules(builds, "stable"), ["linux-big-nvidia", "linux-big-nvidia-open"])
+        self.assertEqual({e for _b, _m, _mod, e in builds}, {f"615.10.02-{REL}"})
+        self.assertEqual({mb for _b, mb, _mod, _e in builds}, {"stable"})
 
     def test_a_new_kernel_rebuilds_every_module(self):
         old_rel = watch.kernel_rel("7.2.7", "1")
@@ -247,10 +257,10 @@ class MovedToStable(unittest.TestCase):
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {}))
         self.assertEqual(builds, [])
 
-    def test_a_newer_driver_in_testing_goes_to_testing_only(self):
+    def test_a_newer_driver_only_in_manjaro_testing_builds_nothing(self):
         newer = dict(MANJARO, **{"nvidia-open-dkms": "615.71.09-1"})
         builds = watch.plan(ROOT, databases(up_to_date(MANJARO), {}, testing_manjaro=newer))
-        self.assertEqual(builds, [("testing", "testing", "linux-big-nvidia-open", f"615.71.09-{REL}")])
+        self.assertEqual(builds, [])
 
 
 class StableBehindMain(unittest.TestCase):
@@ -292,7 +302,7 @@ class StableBehindMain(unittest.TestCase):
         self.assertEqual(stable, [("stable", "stable", "linux-big-nvidia-open", f"615.71.09-{REL}")])
         self.assertEqual(refs, {"stable": self.stable_commit})
         # Testing follows main: it gets the new kernel.
-        self.assertIn(("testing", "testing", "linux-big", "7.2.99-1"), builds)
+        self.assertIn(("testing", "stable", "linux-big", "7.2.99-1"), builds)
 
     def test_nothing_to_do_for_stable_when_its_modules_match(self):
         refs = {}
