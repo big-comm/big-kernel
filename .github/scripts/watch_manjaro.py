@@ -58,10 +58,19 @@ COMMUNITY_DB = "https://repo.communitybig.org/{branch}/x86_64/community-{branch}
 BIGLINUX_DB = "https://repo.biglinux.com.br/{branch}/x86_64/biglinux-{branch}.db"
 
 # BigCommunity branch -> the Manjaro branch its builds run against, the
-# database modules are published to, and the repositories a user of that
-# branch has, in their pacman.conf order. pacman takes a package from the
+# database modules are published to, and the repositories the driver version
+# is looked up in, in pacman.conf order. pacman takes a package from the
 # first repository that has it, so that order decides which driver version
 # users get: a driver BigLinux publishes ahead of Manjaro's wins.
+#
+# Both branches follow Manjaro STABLE's drivers. build-package builds every
+# package against Manjaro stable, whatever manjaro_branch says, so that is
+# the driver a module is really built for. Expecting Manjaro testing's here
+# made the watcher dispatch builds that came out with the old driver, record
+# the new version as done, and then never rebuild it once Manjaro stable got
+# that driver: community-testing kept a module older than nvidia-utils.
+# Users of community-testing on Manjaro testing still wait, while Manjaro
+# testing is ahead, for the driver to reach stable.
 BRANCHES = {
     "stable": (
         "stable",
@@ -75,11 +84,11 @@ BRANCHES = {
         ],
     ),
     "testing": (
-        "testing",
+        "stable",
         COMMUNITY_DB.format(branch="testing"),
         [
             BIGLINUX_DB.format(branch="update-stable"),
-            MANJARO_DB.format(branch="testing"),
+            MANJARO_DB.format(branch="stable"),
             COMMUNITY_DB.format(branch="testing"),
             COMMUNITY_DB.format(branch="stable"),
             COMMUNITY_DB.format(branch="extra"),
