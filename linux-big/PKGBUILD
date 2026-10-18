@@ -113,6 +113,9 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         0101-drm-xe-Capture-devcoredump-on-TLB-invalidation-timeo.patch
         0102-drm-xe-Log-when-a-timed-out-TLB-invalidation-ack-fin.patch
         0103-drm-xe-Implement-Wa_22016122933.patch
+        # Follow-up to 0103 by Navon John Lukose: map those buffers WC on the CPU
+        # (as i915 does), not UC. UC cost ~3 s at boot and ~2.5 s on every resume.
+        0104-drm-xe-Map-Wa_22016122933-buffers-WC-on-the-CPU-side.patch
 )
 sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
             '534895f65175db29e0635fecfef4d4e9cce7574bde3c144f090add61ab681817'
@@ -159,7 +162,8 @@ sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
             '694934e1259e456715ee1358cd3fe934853a8818e9ea5fac2d5136aa6993b08f'
             '85689db7f888c5fba374b1fcc803e3e26ffc927fdef4d87a022ae9f275635449'
             '91bdd01e6a8ec2de0ca198c0a1916fb588e801abfb28cbdd7e745e7a5e2c9492'
-            'afb9cee8496ce87587865c157dfc8966b387a62b611cf49a3b12b967410f2d05')
+            'afb9cee8496ce87587865c157dfc8966b387a62b611cf49a3b12b967410f2d05'
+            '423c9a165c591b0e8da5851b32253089f3be025b0ab8dfb76cd598af2e07b0e5')
 
 _srcdir="linux-${_basekernel}"
 
