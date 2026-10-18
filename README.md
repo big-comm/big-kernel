@@ -109,7 +109,9 @@ Xe driver never inherited.
 
 The series was sent upstream and reviewed by the Xe maintainers
 ([issue 8678](https://gitlab.freedesktop.org/drm/xe/kernel/-/work_items/8678)).
-linux-big carries it until it reaches a kernel release.
+linux-big carries it until it reaches a kernel release, together with a
+follow-up by Navon John Lukose that removes the boot and resume slowdown the
+first version of the workaround caused.
 
 ---
 
@@ -148,6 +150,7 @@ listed in the [PKGBUILD](linux-big/PKGBUILD).
 | `0101` `drm/xe: Capture devcoredump on TLB invalidation timeout` | records the firmware state when a TLB invalidation times out |
 | `0102` `drm/xe: Log when a timed out TLB invalidation ack finally arrives` | tells a lost acknowledgement from a late one |
 | `0103` `drm/xe: Implement Wa_22016122933` | **the fix**: GuC-shared memory on the media GT is mapped uncached |
+| `0104` `drm/xe: Map Wa_22016122933 buffers WC on the CPU side` | keeps the fix but maps that memory write-combined on the CPU, as i915 does: boot and resume are ~3 s and ~2.5 s faster (by Navon John Lukose) |
 | `drm/xe/mcr: Keep GT forcewake during MCR steering` | ports i915's MCR locking; removes a warning on resume |
 | `drm/xe/mcr: Sanitize steering semaphore on GT resume` | releases a semaphore left held across suspend |
 | `drm/i915/vrr: Check TRANS_PUSH_SEND after DSB commit` | removes the `DSB poll error` at boot on Arrow Lake |
