@@ -22,7 +22,7 @@ on:
         type: boolean
         default: false
       force:
-        description: "Dispatch again builds that were already dispatched"
+        description: "Dispatch again builds that were already dispatched, or given up after three attempts"
         type: boolean
         default: false
 
@@ -52,8 +52,9 @@ jobs:
       - name: Test the watcher
         run: python3 -m unittest discover -s .github/scripts -v
 
-      # Which builds were already dispatched, so a failing one is not
-      # dispatched again every half hour.
+      # Which builds were already dispatched, and how many times: a build
+      # that does not publish is dispatched again, up to three attempts,
+      # instead of every half hour.
       - name: Restore dispatch state
         uses: actions/cache/restore@v4
         with:

@@ -24,6 +24,7 @@ there, since the build needs linux-big-headers of that exact version.
 """
 
 import argparse
+import calendar
 import io
 import json
 import os
@@ -386,13 +387,50 @@ def payload(branch, manjaro_branch, module, ref="main"):
     return {"event_type": module, "client_payload": data}
 
 
-def pending(builds, state, force=False):
-    """Drop the builds already dispatched for the same version.
+# A build that did not publish is dispatched again, up to MAX_ATTEMPTS in all:
+# most failures are the network (2026-10-18: a module's build could not
+# download linux-big from repo.communitybig.org, "Connection reset by peer").
+# RETRY_AFTER is how long a dispatch is given to show up as a run and, once
+# built, in the repository database. A build still queued or running is never
+# dispatched again (building()), so a kernel's four hours are not cut short.
+MAX_ATTEMPTS = 3
+RETRY_AFTER = 30 * 60
 
-    A build that fails would otherwise be dispatched again on every run; each
-    expected version is dispatched once, and force retries it.
+
+def attempt(state, key):
+    """(attempts, last dispatch as epoch seconds, gave_up) recorded for key.
+
+    A plain timestamp is the format before retries existed: one attempt.
     """
-    return [build for build in builds if force or state_key(*build) not in state]
+    entry = state.get(key)
+    if entry is None:
+        return 0, None, False
+    if isinstance(entry, str):
+        entry = {"at": entry, "attempts": 1}
+    at = calendar.timegm(time.strptime(entry["at"], "%Y-%m-%dT%H:%M:%SZ"))
+    return entry.get("attempts", 1), at, entry.get("gave_up", False)
+
+
+def pending(builds, state, force=False, now=None):
+    """Split the builds behind into (to dispatch, given up).
+
+    A version is dispatched once; while it is still behind, it is dispatched
+    again RETRY_AFTER after the last attempt, up to MAX_ATTEMPTS. force
+    dispatches it whatever was recorded.
+    """
+    now = time.time() if now is None else now
+    todo, given_up = [], []
+    for build in builds:
+        attempts, at, _gave_up = attempt(state, state_key(*build))
+        if force or attempts == 0:
+            todo.append(build)
+        elif now - at < RETRY_AFTER:
+            continue
+        elif attempts < MAX_ATTEMPTS:
+            todo.append(build)
+        else:
+            given_up.append(build)
+    return todo, given_up
 
 
 def state_key(branch, _manjaro_branch, module, expected):
@@ -509,10 +547,20 @@ def main():
         state = json.load(open(args.state, encoding="utf-8"))
     except (OSError, ValueError):
         state = {}
-    todo = pending(builds, state, args.force)
+    todo, given_up = pending(builds, state, args.force)
     for build in builds:
-        if build not in todo:
-            log(f"[{build[0]}] {build[2]} {build[3]}: already dispatched at {state[state_key(*build)]}, not again")
+        if build not in todo and build not in given_up:
+            attempts, _at, _gave_up = attempt(state, state_key(*build))
+            log(f"[{build[0]}] {build[2]} {build[3]}: attempt {attempts} of {MAX_ATTEMPTS} dispatched recently, waiting for it")
+    newly_given_up = []
+    for build in given_up:
+        key = state_key(*build)
+        log(f"[{build[0]}] {build[2]} {build[3]}: still not published after {MAX_ATTEMPTS} attempts, given up")
+        if not attempt(state, key)[2]:
+            newly_given_up.append(build)
+            if not args.dry_run:
+                entry = state[key] if isinstance(state[key], dict) else {"at": state[key], "attempts": 1}
+                state[key] = dict(entry, gave_up=True)
 
     token = os.environ.get("DISPATCH_TOKEN", "")
     active = building(token) if todo and token and not args.dry_run else set()
@@ -535,9 +583,10 @@ def main():
             continue
         if not token:
             raise SystemExit("DISPATCH_TOKEN is not set")
+        attempts = 1 if args.force else attempt(state, key)[0] + 1
         status = dispatch(token, body)
-        log(f"[{branch}] dispatched {module} {expected} (HTTP {status})")
-        state[key] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        log(f"[{branch}] dispatched {module} {expected}, attempt {attempts} of {MAX_ATTEMPTS} (HTTP {status})")
+        state[key] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "attempts": attempts}
         dispatched += 1
         if module == "linux-big":
             # The workflow waits for it and then runs this watcher again, so
@@ -553,6 +602,12 @@ def main():
     if not args.dry_run:
         save_state(args.state, state)
     log(f"{len(builds)} package(s) behind, {dispatched} dispatched")
+    if newly_given_up:
+        # Fails this run once, so GitHub mails it; later runs only log it.
+        names = ", ".join(f"{b[0]}/{b[2]} {b[3]}" for b in newly_given_up)
+        print(f"::error::not published after {MAX_ATTEMPTS} attempts: {names}", flush=True)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 Run from the repository root: python3 -m unittest discover -s .github/scripts
 """
 
+import contextlib
 import io
 import os
 import re
@@ -112,7 +113,8 @@ class Plan(unittest.TestCase):
     def test_the_kernel_build_is_dispatched_once(self):
         build = ("testing", "testing", "linux-big", KERNEL)
         state = {watch.state_key(*build): "2026-09-27T00:00:00Z"}
-        self.assertEqual(watch.pending([build], state), [])
+        now = watch.calendar.timegm((2026, 9, 27, 0, 10, 0))
+        self.assertEqual(watch.pending([build], state, now=now), ([], []))
 
     def test_a_published_kernel_without_modules_builds_all_of_them(self):
         builds = watch.plan(ROOT, databases({"linux-big": KERNEL}, {"linux-big": KERNEL}))
@@ -280,19 +282,41 @@ class Rel(unittest.TestCase):
 
 class Dedupe(unittest.TestCase):
     build = ("testing", "testing", "linux-big-nvidia-open", "615.10.02-7020702")
+    at = watch.calendar.timegm((2026, 9, 24, 0, 0, 0))
 
-    def test_a_version_is_dispatched_once(self):
-        state = {watch.state_key(*self.build): "2026-09-24T00:00:00Z"}
-        self.assertEqual(watch.pending([self.build], state), [])
+    def state(self, attempts=None, **extra):
+        value = "2026-09-24T00:00:00Z" if attempts is None else dict({"at": "2026-09-24T00:00:00Z", "attempts": attempts}, **extra)
+        return {watch.state_key(*self.build): value}
+
+    def test_a_version_dispatched_recently_waits(self):
+        now = self.at + watch.RETRY_AFTER - 1
+        self.assertEqual(watch.pending([self.build], self.state(), now=now), ([], []))
 
     def test_force_dispatches_it_again(self):
-        state = {watch.state_key(*self.build): "2026-09-24T00:00:00Z"}
-        self.assertEqual(watch.pending([self.build], state, force=True), [self.build])
+        now = self.at + 60
+        self.assertEqual(watch.pending([self.build], self.state(3), force=True, now=now), ([self.build], []))
 
     def test_a_newer_version_is_dispatched(self):
-        state = {watch.state_key(*self.build): "2026-09-24T00:00:00Z"}
         newer = self.build[:3] + ("615.20.01-7020702",)
-        self.assertEqual(watch.pending([newer], state), [newer])
+        self.assertEqual(watch.pending([newer], self.state(), now=self.at + 60), ([newer], []))
+
+    def test_a_build_that_did_not_publish_is_dispatched_again(self):
+        # 2026-10-18: linux-big-nvidia failed to download linux-big from the
+        # repository; the version stayed behind and nobody dispatched it again.
+        now = self.at + watch.RETRY_AFTER
+        self.assertEqual(watch.pending([self.build], self.state(), now=now), ([self.build], []))
+        self.assertEqual(watch.pending([self.build], self.state(2), now=now), ([self.build], []))
+
+    def test_three_attempts_then_it_gives_up(self):
+        now = self.at + watch.RETRY_AFTER
+        self.assertEqual(watch.pending([self.build], self.state(3), now=now), ([], [self.build]))
+
+    def test_the_old_state_format_counts_as_one_attempt(self):
+        self.assertEqual(watch.attempt(self.state(), watch.state_key(*self.build)), (1, self.at, False))
+
+    def test_giving_up_is_remembered(self):
+        state = self.state(3, gave_up=True)
+        self.assertEqual(watch.attempt(state, watch.state_key(*self.build)), (3, self.at, True))
 
 
 class MovedToStable(unittest.TestCase):
@@ -414,6 +438,55 @@ class StableDispatch(unittest.TestCase):
             ("linux-big-nvidia-open", watch.STABLE_REF),
             ("linux-big", "main"),
         ])
+
+
+class Retry(unittest.TestCase):
+    """main() records each attempt and fails one run when it gives up."""
+
+    build = ("testing", "stable", "linux-big-nvidia", "610.57.04+615.71.09-7021102")
+
+    def run_main(self, state, active=frozenset()):
+        import json
+        import tempfile
+        sent = []
+        state_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(state, state_file)
+        state_file.close()
+        self.addCleanup(os.unlink, state_file.name)
+        saved = (watch.plan, watch.building, watch.dispatch, watch.log, sys.argv)
+        watch.plan = lambda root, fetch, refs=None, **_kw: [self.build]
+        watch.building = lambda token: set(active)
+        watch.dispatch = lambda token, body: sent.append(body["event_type"]) or 204
+        watch.log = lambda _message: None
+        sys.argv = ["watch_manjaro.py", "--state", state_file.name]
+        os.environ["DISPATCH_TOKEN"] = "x"
+        github_output = os.environ.pop("GITHUB_OUTPUT", None)
+        try:
+            with open(os.devnull, "w") as quiet, contextlib.redirect_stdout(quiet):
+                code = watch.main()
+        finally:
+            watch.plan, watch.building, watch.dispatch, watch.log, sys.argv = saved
+            del os.environ["DISPATCH_TOKEN"]
+            if github_output is not None:
+                os.environ["GITHUB_OUTPUT"] = github_output
+        with open(state_file.name, encoding="utf-8") as saved_state:
+            return code, sent, json.load(saved_state)[watch.state_key(*self.build)]
+
+    def test_a_failed_build_is_dispatched_again_and_counted(self):
+        code, sent, entry = self.run_main({watch.state_key(*self.build): "2026-10-18T21:00:00Z"})
+        self.assertEqual((code, sent, entry["attempts"]), (0, ["linux-big-nvidia"], 2))
+
+    def test_a_build_still_running_is_not_dispatched_again(self):
+        old = {watch.state_key(*self.build): "2026-10-18T21:00:00Z"}
+        code, sent, _entry = self.run_main(old, active={"linux-big-nvidia"})
+        self.assertEqual((code, sent), (0, []))
+
+    def test_giving_up_fails_one_run_only(self):
+        old = {watch.state_key(*self.build): {"at": "2026-10-18T21:00:00Z", "attempts": 3}}
+        code, sent, entry = self.run_main(old)
+        self.assertEqual((code, sent, entry.get("gave_up")), (1, [], True))
+        code, sent, _entry = self.run_main({watch.state_key(*self.build): entry})
+        self.assertEqual((code, sent), (0, []))
 
 
 class PointBranch(unittest.TestCase):

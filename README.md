@@ -275,11 +275,14 @@ Nobody rebuilds them by hand. The [watcher](.github/workflows/watch-manjaro.yml)
 compares, every 30 minutes and for both the testing and stable branches, what
 the modules should be — the driver users get, on the current linux-big — with
 what BigCommunity has published, and dispatches a build of every module that is
-behind. The driver version is resolved the way pacman does it: from the first
-repository in the users' order that has it — BigLinux, then Manjaro, then
-BigCommunity — so a driver BigLinux publishes ahead of Manjaro is followed too.
-Both branches follow the drivers of Manjaro **stable**, the branch every
-package is built against.
+behind. A build that does not get published, usually because of the network, is
+dispatched again once it is no longer running and at least half an hour has
+passed since the last dispatch, up to three attempts in all; after the third the
+watcher run fails once, so GitHub mails it. The driver version is resolved the
+way pacman does it: from the first repository in the users' order that has it —
+BigLinux, then Manjaro, then BigCommunity — so a driver BigLinux publishes ahead
+of Manjaro is followed too. Both branches follow the drivers of Manjaro
+**stable**, the branch every package is built against.
 
 Which NVIDIA driver a machine has is decided by its Manjaro branch, not by
 BigCommunity's. So while Manjaro testing has a newer NVIDIA driver than stable,
