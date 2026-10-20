@@ -27,7 +27,6 @@ MANJARO = {
     "nvidia-580xx-open-dkms": "580.178.04-1",
     "nvidia-580xx-dkms": "580.178.04-1",
     "broadcom-wl-dkms": "6.30.223.271-49.0",
-    "nvidia-470xx-dkms": "470.256.02-21",
     "nvidia-390xx-dkms": "390.157-33",
     "virtualbox-host-dkms": "7.2.16-1",
     "zfs-dkms": "2.4.4-1",
