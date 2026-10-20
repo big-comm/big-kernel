@@ -242,15 +242,28 @@ Move the kernel, its headers and all its modules together (Repo-Management's
 
 ## NVIDIA and other kernel modules
 
-Like the Manjaro kernels, linux-big has prebuilt modules, installed by mhwd
-the same way (`<kernel>-nvidia-open` and so on):
+Like the Manjaro kernels, linux-big has prebuilt modules, named
+`<kernel>-<module>` (`linux-big-nvidia-open` and so on). On BigCommunity they
+are chosen and installed by
+[big-driver-manager-cli](https://github.com/biglinux/big-driver-manager-cli),
+which replaced mhwd: on the live system (`big-driver-manager-live.service`), in the
+Calamares installer and in the Big Driver Manager interface. For each kernel
+installed it looks for the module package named after that kernel's pkgbase,
+and picks the NVIDIA branch from NVIDIA's own `supported-gpus.json`. When a
+kernel has no module package for a driver, it installs the `-dkms` driver with
+the kernel headers instead, and when there is none of those either, the GPU
+stays on nouveau.
+
+Two things in this repository are a contract with big-driver-manager-cli and
+must not change: the `pkgbase` file the linux-big PKGBUILD writes to
+`/usr/lib/modules/<version>/pkgbase` (it reads `linux-big` there), and the
+`<kernel>-<module>` names of the module packages.
 
 | Package | For |
 |---|---|
 | `linux-big-nvidia-open` | NVIDIA, Turing (GTX 16xx, RTX 20) and newer, open modules |
 | `linux-big-nvidia` | NVIDIA, Turing and newer, proprietary modules |
 | `linux-big-nvidia-580xx-open`, `linux-big-nvidia-580xx` | NVIDIA 580xx: Maxwell, Pascal and Volta (GTX 750, 900, 10xx) |
-| `linux-big-nvidia-470xx` | NVIDIA 470xx: Kepler (GTX 600, 700) |
 | `linux-big-nvidia-390xx` | NVIDIA 390xx: Fermi (GTX 400, 500) |
 | `linux-big-virtualbox-host-modules` | running VirtualBox virtual machines |
 | `linux-big-zfs` | the ZFS file system |
@@ -258,12 +271,22 @@ the same way (`<kernel>-nvidia-open` and so on):
 | `linux-big-broadcom-wl` | Broadcom BCM43xx Wi-Fi |
 | `linux-big-r8168` | Realtek RTL8168 Ethernet |
 | `linux-big-rtl8723bu` | Realtek RTL8723BU USB Wi-Fi |
-| `linux-big-bbswitch` | switching off the discrete GPU of Optimus laptops |
 | `linux-big-acpi_call` | ACPI calls for power and battery tools (TLP) |
 | `linux-big-tp_smapi` | battery and sensors on older ThinkPads |
 
-This is the same set Manjaro builds for each of its kernels, so switching to
-linux-big keeps whatever of it a machine uses.
+This is the set Manjaro builds for each of its kernels, less two:
+
+- **`bbswitch`**, which switched off the discrete GPU of Optimus laptops in the
+  Bumblebee days. The NVIDIA driver does that now, with RTD3 and PRIME.
+- **`nvidia-470xx`**, for Kepler (GTX 600 and 700, GT 710 and 730): X11 only,
+  and out of NVIDIA's support since 2024. Those cards stay on nouveau, or take
+  `nvidia-470xx-dkms` from the Big Driver Manager interface.
+
+`linux-big-bbswitch` and `linux-big-nvidia-470xx` were published before they
+were dropped. Each depends on one exact linux-big, so on a machine that has
+either one installed it holds every later linux-big back: remove it (on a
+Kepler card, replace `linux-big-nvidia-470xx` with `nvidia-470xx-dkms`) to keep
+getting linux-big updates.
 
 They are built with dkms from the driver packages in Manjaro's repositories —
 no driver code lives here — and each one depends on one exact linux-big and
@@ -393,7 +416,6 @@ big-kernel/
 ├── linux-big/                  # the kernel: PKGBUILD, config, patches
 ├── linux-big-nvidia*/          # NVIDIA modules
 ├── linux-big-broadcom-wl/      # Broadcom Wi-Fi module
-├── linux-big-bbswitch/         # Optimus GPU switch module
 └── .github/
     ├── workflows/              # the kernel and module watchers
     ├── scripts/                # the watchers and their tests
