@@ -58,8 +58,9 @@ MODULES = {
 }
 
 MANJARO_DB = "https://mirrors.manjaro.org/repo/{branch}/extra/x86_64/extra.db"
-COMMUNITY_DB = "https://repo.communitybig.org/{branch}/x86_64/community-{branch}.db"
-BIGLINUX_DB = "https://repo.biglinux.com.br/{branch}/x86_64/biglinux-{branch}.db"
+# Each repository at <host>/<section>/<arch>, the $repo/$arch layout pacman.conf uses.
+COMMUNITY_DB = "https://repo.communitybig.org/community-{branch}/x86_64/community-{branch}.db"
+BIGLINUX_DB = "https://packages.biglinux.com.br/biglinux-{branch}/x86_64/biglinux-{branch}.db"
 
 # BigCommunity branch -> the Manjaro branch its builds run against, the
 # database modules are published to, and the repositories the driver version
@@ -80,7 +81,7 @@ BRANCHES = {
         "stable",
         COMMUNITY_DB.format(branch="stable"),
         [
-            BIGLINUX_DB.format(branch="update-stable"),
+            BIGLINUX_DB.format(branch="priority"),
             MANJARO_DB.format(branch="stable"),
             COMMUNITY_DB.format(branch="stable"),
             COMMUNITY_DB.format(branch="extra"),
@@ -91,7 +92,7 @@ BRANCHES = {
         "stable",
         COMMUNITY_DB.format(branch="testing"),
         [
-            BIGLINUX_DB.format(branch="update-stable"),
+            BIGLINUX_DB.format(branch="priority"),
             MANJARO_DB.format(branch="stable"),
             COMMUNITY_DB.format(branch="testing"),
             COMMUNITY_DB.format(branch="stable"),
