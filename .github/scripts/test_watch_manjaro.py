@@ -178,10 +178,10 @@ class Plan(unittest.TestCase):
         self.assertEqual(modules(builds, "stable"), sorted(watch.MODULES))
 
     def test_a_driver_biglinux_publishes_first_wins_as_it_does_for_pacman(self):
-        # biglinux-update-stable comes before Manjaro's extra in pacman.conf.
+        # biglinux-priority comes before Manjaro's extra in pacman.conf.
         biglinux = {"nvidia-open-dkms": "615.10.02-1"}
         builds = watch.plan(
-            ROOT, databases(up_to_date(MANJARO), {}, update_stable=biglinux)
+            ROOT, databases(up_to_date(MANJARO), {}, priority=biglinux)
         )
         stable = [(m, e) for b, _mb, m, e in builds if b == "stable"]
         self.assertEqual(stable, [("linux-big-nvidia-open", f"615.10.02-{REL}")])
