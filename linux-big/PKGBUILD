@@ -19,7 +19,7 @@
 
 _basekernel=7.2
 pkgbase=linux-big
-pkgver=7.2.13
+pkgver=7.2.14
 pkgrel=1
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
@@ -118,7 +118,7 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         0104-drm-xe-Map-Wa_22016122933-buffers-WC-on-the-CPU-side.patch
 )
 sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
-            '86ad07d2d55b34ddb75a88cd62245111d82f810eff5e81ad4b042e41df6253db'
+            'de23840e02788ea04702b534ac32723c57ca4bb7800d35de0e561b19b5770e03'
             '0d7a55d95acde5c76da3bdc184030b9799b27be1422fbb4833349382d0864467'
             'e5e98d62b63704cecdf32dbe6a9bafea6e70b23fa8e01fe96ca220ac6036392e'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
