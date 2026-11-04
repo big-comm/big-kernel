@@ -71,6 +71,7 @@ jobs:
             echo "from=$(jq -r .from "$RUNNER_TEMP/bump.json")"
             echo "to=$(jq -r '.to // ""' "$RUNNER_TEMP/bump.json")"
             echo "series=$(jq -r .series "$RUNNER_TEMP/bump.json")"
+            echo "eol=$(jq -r '.eol // false' "$RUNNER_TEMP/bump.json")"
           } >> "$GITHUB_OUTPUT"
 
       # Commits happen only from the default branch, the one the
@@ -89,23 +90,24 @@ jobs:
             echo
             echo "Updated by the kernel watcher: prepare() applied every patch"
             echo "and kept every required option on $TO."
+            jq -r 'if .eol then "\n\(.to) is the last release of \(.series): kernel.org marks the series end of life." else empty end' "$RUNNER_TEMP/bump.json"
             jq -r 'if (.dropped | length) > 0 then "\nAlready in \(.to), dropped:\n" + (.dropped | map("  " + .) | join("\n")) else empty end' "$RUNNER_TEMP/bump.json"
           } > "$RUNNER_TEMP/message"
           git commit -F "$RUNNER_TEMP/message"
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Report what needs a person
-        if: steps.bump.outputs.status == 'failed' || steps.bump.outputs.status == 'eol'
+        if: steps.bump.outputs.status == 'failed' || steps.bump.outputs.status == 'eol' || steps.bump.outputs.eol == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const result = JSON.parse(require('fs').readFileSync(`${process.env.RUNNER_TEMP}/bump.json`, 'utf8'));
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             let title, body;
-            if (result.status === 'eol') {
+            if (result.status === 'eol' || result.eol) {
               title = `linux-big: kernel ${result.series} reached its end of life`;
               body = [
-                `kernel.org no longer maintains ${result.series}; linux-big is on ${result.from}.`,
+                `kernel.org no longer maintains ${result.series}; linux-big is on ${result.status === 'bumped' ? result.to : result.from}, its last release.`,
                 '',
                 'Moving to the next series is not automatic: set `_basekernel` and `pkgver`,',
                 'refresh the config and the patches, and build it for testing.',
