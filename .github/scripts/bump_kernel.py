@@ -13,7 +13,9 @@ linux-big/PKGBUILD (_basekernel), it:
 The result is written to --result as JSON for the workflow: "current" (no
 newer release), "bumped" (the PKGBUILD was updated and prepare() passed),
 "failed" (it did not; nothing should be built) or "eol" (the series reached
-its end of life and moving to the next one is a decision for a person).
+its end of life and moving to the next one is a decision for a person). The
+last release of a series comes already marked end of life: it is bumped to
+all the same, with "eol": true in the result.
 """
 
 import argparse
@@ -71,6 +73,11 @@ def latest_in_series(releases, series):
         return None, True
     newest = max(found, key=lambda release: version_key(release["version"]))
     return newest["version"], bool(newest.get("iseol"))
+
+
+def _with_eol(finish, reason):
+    """finish() that also marks the result as the series' last release."""
+    return lambda status, **details: finish(status, eol=True, reason=reason, **details)
 
 
 def source_entries(text):
@@ -198,10 +205,15 @@ def main():
 
     releases = json.load(open(args.releases)) if args.releases else json.loads(fetch(RELEASES_URL))
     latest, eol = latest_in_series(releases, series)
-    if latest is None or eol:
-        return finish("eol", to=latest, reason=f"kernel.org lists {series} as end of life")
+    reason = f"kernel.org lists {series} as end of life"
+    # A series' last release is published already marked end of life (7.2.15
+    # on 2026-11-01): it is still taken, then the end of life is reported.
+    if latest is None or (eol and version_key(latest) <= version_key(current)):
+        return finish("eol", to=latest, reason=reason)
     if version_key(latest) <= version_key(current):
         return finish("current", to=latest)
+    if eol:
+        finish = _with_eol(finish, reason)
     log(f"linux-big {current} -> {latest}")
 
     cdn = CDN.format(major=series.split(".")[0])

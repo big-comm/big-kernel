@@ -249,10 +249,18 @@ class Main(unittest.TestCase):
         self.assertEqual(self.run_watcher(releases(("stable", "7.2.6", False)))["status"], "current")
         self.assertTrue(os.path.isdir(self.cache))
 
-    def test_end_of_life_is_reported_not_acted_on(self):
+    def test_the_last_release_is_taken_even_marked_end_of_life(self):
+        # 7.2.15 came out already marked end of life on 2026-11-01, and the
+        # watcher reported the end of life without moving to it.
+        self.series([("0001-ours.patch", diff("a.c", A, A_OURS))])
+        result = self.run_watcher(releases(("stable", "7.2.9", True)))
+        self.assertEqual((result["status"], result["to"], result["eol"]), ("bumped", "7.2.9", True))
+        self.assertIn("pkgver=7.2.9\n", self.pkgbuild())
+
+    def test_end_of_life_on_the_last_release_is_reported_not_acted_on(self):
         self.series([("0001-ours.patch", diff("a.c", A, A_OURS))])
         before = self.pkgbuild()
-        self.assertEqual(self.run_watcher(releases(("stable", "7.2.9", True)))["status"], "eol")
+        self.assertEqual(self.run_watcher(releases(("stable", "7.2.6", True)))["status"], "eol")
         self.assertEqual(self.pkgbuild(), before)
 
 
