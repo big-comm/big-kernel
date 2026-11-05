@@ -15,9 +15,10 @@ fixes for Intel graphics.
 The goal is simple: a kernel that feels faster under load, whether you are
 gaming or not, on the hardware our users actually have.
 
-> **Status: first release in testing.** `linux-big` 7.2 is being validated on
-> Intel and AMD machines before it is offered to everyone. See the
-> [roadmap](#roadmap).
+> **Status:** 7.2 is the recommended series (`linux-big` brings it), 7.3 is in
+> testing. Each kernel series is a package of its own (`linux-big72`,
+> `linux-big73`) and they install side by side.
+> See [Kernel series](#kernel-series) and the [roadmap](#roadmap).
 
 ---
 
@@ -27,6 +28,7 @@ gaming or not, on the hardware our users actually have.
 - [How it differs from the Manjaro kernel](#how-it-differs-from-the-manjaro-kernel)
 - [Patches](#patches)
 - [Installing](#installing)
+- [Kernel series](#kernel-series)
 - [Checking that it works](#checking-that-it-works)
 - [Kernel updates](#kernel-updates)
 - [NVIDIA and other kernel modules](#nvidia-and-other-kernel-modules)
@@ -140,8 +142,9 @@ drops one of them, the build fails instead of shipping without it.
 
 ## Patches
 
-All patches live in [`linux-big/`](linux-big) and are applied in the order
-listed in the [PKGBUILD](linux-big/PKGBUILD).
+Each series has its own patches, in its directory —
+[`linux-big73/`](linux-big73), [`linux-big72/`](linux-big72) — applied in the
+order its PKGBUILD lists them. The tables describe the current series, 7.3.
 
 **BigCommunity — Intel graphics**
 
@@ -160,9 +163,9 @@ listed in the [PKGBUILD](linux-big/PKGBUILD).
 
 | Patch | Version |
 |---|---|
-| `0200-sched-bore` | BORE 6.8.0 |
+| `0200-sched-bore` | BORE 7.0.1 (6.8.0 on 7.2) |
 | `0201-block-adios` | ADIOS 3.3.0r2 |
-| `0202-sched-poc-selector` | POC 2.6.3 |
+| `0202-sched-poc-selector` | POC 3.0.0 (2.6.3 on 7.2) |
 
 **From the Manjaro kernel** — AMD GPU race fix and brightness curve check, USB
 VHCI suspend, Realtek audio, Intel Wi-Fi, unprivileged user namespaces sysctl,
@@ -180,15 +183,66 @@ your current kernel — it does not replace it.
 sudo pacman -S linux-big linux-big-headers
 ```
 
-The boot image is `/boot/vmlinuz-linux-big`; pick **linux-big** in the GRUB menu
-at the next boot. Keep another kernel installed as a fallback.
+`linux-big` brings the series BigCommunity recommends — 7.2 today — and keeps
+following it: when the next one is approved, the update installs it next to
+the one you have. A series still in testing is installed by name, and goes
+next to the one you have:
+
+```bash
+sudo pacman -S linux-big73 linux-big73-headers
+```
+
+Each series boots from its own image, `/boot/vmlinuz-linux-big73`,
+`/boot/vmlinuz-linux-big72`, with its own GRUB entry. Keep another kernel
+installed as a fallback.
+
+---
+
+## Kernel series
+
+Each kernel series is a package of its own, as in Manjaro (`linux72`,
+`linux73`):
+
+| Package | What it is |
+|---|---|
+| `linux-big73`, `linux-big73-headers` | the 7.3 series |
+| `linux-big72`, `linux-big72-headers` | the 7.2 series, kept for the machines that boot it |
+| `linux-big73-nvidia`, `linux-big72-zfs`, … | each series' modules |
+| `linux-big`, `linux-big-headers`, `linux-big-<module>` | metapackages: they install nothing, and depend on the same package of every series in `_series` — today `linux-big72` only |
+
+Every series has its own boot image, initramfs, `/usr/src/linux-bigNN` and
+modules, so a new series never takes away the one that was working.
+
+The metapackages are what the ISO and users ask for, and how a machine moves
+on, in two steps:
+
+1. **Now.** Before the series were split, `linux-big` was the 7.2 kernel
+   itself. A machine that has it — every install of the 7.2 ISO — gets on its
+   next update `linux-big72`, the same 7.2.15 under its new name, and for
+   each module it had, the `linux-big72-` one. 7.3 is published to testing,
+   but no metapackage brings it: on testing, whoever wants it installs
+   `linux-big73` by name and keeps both.
+2. **When 7.3 is approved for everyone.** It is put first in `_series`, next
+   to 7.2, and the metapackage goes to testing and then to stable as any
+   update. Machines get `linux-big73` **and** keep `linux-big72`; both show up
+   in GRUB, each with its own modules. Once 7.3 has proven itself, 7.2 is
+   dropped from `_series`, and machines keep it until they remove it.
+
+`linux-big72` is 7.2.15-**2**, the same 7.2.15 as the old package: with the
+old release, `/usr/lib/modules/7.2.15-1-big` would only change owner, and
+mkinitcpio would leave `/boot/vmlinuz-linux-big` behind as a third GRUB
+entry.
+
+The metapackages are published only after everything they depend on is in
+the branch — before that, `pacman -Syu` could not update. The module watcher
+does that by itself for testing.
 
 ---
 
 ## Checking that it works
 
 ```bash
-uname -r                                  # 7.2.x-N-big
+uname -r                                  # 7.3.x-N-big
 sudo dmesg | grep -i "BORE CPU Scheduler" # BORE is active
 sysctl kernel.sched_bore                  # 1 = enabled
 sysctl kernel.sched_poc_selector          # 1 = enabled
@@ -203,9 +257,10 @@ BORE and POC can be switched off at runtime, for comparison, with
 
 ## Kernel updates
 
-linux-big follows its kernel.org series by itself. Every six hours the
-[kernel watcher](.github/workflows/watch-kernel.yml) checks kernel.org, and when
-a new release of the series is out (7.2.8, 7.2.9, …) it:
+Each series follows its kernel.org series by itself. Every six hours the
+[kernel watcher](.github/workflows/watch-kernel.yml) checks kernel.org for
+every `linux-bigNN` directory, and when a new release of a series is out
+(7.3.1, 7.3.2, …) it:
 
 1. moves the PKGBUILD to it — new `pkgver`, `pkgrel` back to 1, the new stable
    patch and its checksum;
@@ -216,34 +271,54 @@ a new release of the series is out (7.2.8, 7.2.9, …) it:
    built in: every patch must apply and every option linux-big exists for
    (BORE, ADIOS, POC, Clang ThinLTO, AutoFDO, …) must survive the configuration;
 4. commits the update. The module watcher, which compares the PKGBUILD with
-   what is published every 30 minutes, then sends linux-big to be built for
+   what is published every 30 minutes, then sends the kernel to be built for
    **testing**, and the modules once it is published. Building is decided from
    what is published, so a dispatch that fails is simply retried.
 
 When a patch no longer fits or an option is lost, nothing is committed or
 built: the watcher opens an issue naming the patch or the option, once. It
-does the same when kernel.org marks the series end of life.
+does the same when kernel.org marks the current series end of life; an older
+series at its end of life is the one kept for the machines that boot it, and
+is left as it is.
 
 Three decisions stay with a person: moving a kernel from testing to stable,
-moving to the next series (7.3), and refreshing a patch that stopped applying.
+moving to the next series, and refreshing a patch that stopped applying.
+
+### Moving to the next series
+
+1. Copy the current series' directory and modules to the next number
+   (`linux-big74`, `linux-big74-nvidia`, …). In each module PKGBUILD only the
+   `_kernel_pkg=` line changes; a test checks that the copies stay the same
+   PKGBUILD.
+2. In the kernel: `pkgbase`, `_basekernel`, `pkgver`, the config and the
+   patches.
+3. When it is approved for everyone, in [`linux-big/PKGBUILD`](linux-big/PKGBUILD):
+   put it first in `_series` and set `pkgver` to it. Until then it is only in
+   testing, installed by name.
+4. Once the oldest series is no longer needed, take it out of `_series` and
+   delete its directories.
+
+The watchers pick the new directories up by themselves.
 
 ### Moving a kernel to stable
 
 Move the kernel, its headers and all its modules together (Repo-Management's
-"move" moves the files as they are, nothing is rebuilt). After that:
+"move" moves the files as they are, nothing is rebuilt), and the `linux-big*`
+metapackages with them or after them — never before: they depend on every
+series being there. After that:
 
 - testing is seen as its users see it, with stable underneath: the watcher
   does not take the kernel's absence from testing for a missing build;
 - the next kernel still goes to testing by itself, over stable's;
 - stable's modules keep following Manjaro stable's drivers. When stable's
   kernel is older than the PKGBUILD on main, the watcher finds the commit
-  that described it, points the `linux-big-stable` branch there and builds
-  the modules from it.
+  that described it, points that series' `linux-bigNN-stable` branch there
+  and builds the modules from it.
 
 ## NVIDIA and other kernel modules
 
 Like the Manjaro kernels, linux-big has prebuilt modules, named
-`<kernel>-<module>` (`linux-big-nvidia-open` and so on). On BigCommunity they
+`<kernel>-<module>` (`linux-big73-nvidia-open` and so on). On BigCommunity they
 are chosen and installed by
 [big-driver-manager-cli](https://github.com/biglinux/big-driver-manager-cli),
 which replaced mhwd: on the live system (`big-driver-manager-live.service`), in the
@@ -255,24 +330,26 @@ the kernel headers instead, and when there is none of those either, the GPU
 stays on nouveau.
 
 Two things in this repository are a contract with big-driver-manager-cli and
-must not change: the `pkgbase` file the linux-big PKGBUILD writes to
-`/usr/lib/modules/<version>/pkgbase` (it reads `linux-big` there), and the
+must not change: the `pkgbase` file each kernel PKGBUILD writes to
+`/usr/lib/modules/<version>/pkgbase` (it reads `linux-big73` there), and the
 `<kernel>-<module>` names of the module packages.
+
+Every series has the same set; the table names the modules of 7.3.
 
 | Package | For |
 |---|---|
-| `linux-big-nvidia-open` | NVIDIA, Turing (GTX 16xx, RTX 20) and newer, open modules |
-| `linux-big-nvidia` | NVIDIA, Turing and newer, proprietary modules |
-| `linux-big-nvidia-580xx-open`, `linux-big-nvidia-580xx` | NVIDIA 580xx: Maxwell, Pascal and Volta (GTX 750, 900, 10xx) |
-| `linux-big-nvidia-390xx` | NVIDIA 390xx: Fermi (GTX 400, 500) |
-| `linux-big-virtualbox-host-modules` | running VirtualBox virtual machines |
-| `linux-big-zfs` | the ZFS file system |
-| `linux-big-vhba-module` | virtual CD/DVD drives (CDEmu) |
-| `linux-big-broadcom-wl` | Broadcom BCM43xx Wi-Fi |
-| `linux-big-r8168` | Realtek RTL8168 Ethernet |
-| `linux-big-rtl8723bu` | Realtek RTL8723BU USB Wi-Fi |
-| `linux-big-acpi_call` | ACPI calls for power and battery tools (TLP) |
-| `linux-big-tp_smapi` | battery and sensors on older ThinkPads |
+| `linux-big73-nvidia-open` | NVIDIA, Turing (GTX 16xx, RTX 20) and newer, open modules |
+| `linux-big73-nvidia` | NVIDIA, Turing and newer, proprietary modules |
+| `linux-big73-nvidia-580xx-open`, `linux-big73-nvidia-580xx` | NVIDIA 580xx: Maxwell, Pascal and Volta (GTX 750, 900, 10xx) |
+| `linux-big73-nvidia-390xx` | NVIDIA 390xx: Fermi (GTX 400, 500) |
+| `linux-big73-virtualbox-host-modules` | running VirtualBox virtual machines |
+| `linux-big73-zfs` | the ZFS file system |
+| `linux-big73-vhba-module` | virtual CD/DVD drives (CDEmu) |
+| `linux-big73-broadcom-wl` | Broadcom BCM43xx Wi-Fi |
+| `linux-big73-r8168` | Realtek RTL8168 Ethernet |
+| `linux-big73-rtl8723bu` | Realtek RTL8723BU USB Wi-Fi |
+| `linux-big73-acpi_call` | ACPI calls for power and battery tools (TLP) |
+| `linux-big73-tp_smapi` | battery and sensors on older ThinkPads |
 
 This is the set Manjaro builds for each of its kernels, less two:
 
@@ -289,14 +366,15 @@ Kepler card, replace `linux-big-nvidia-470xx` with `nvidia-470xx-dkms`) to keep
 getting linux-big updates.
 
 They are built with dkms from the driver packages in Manjaro's repositories —
-no driver code lives here — and each one depends on one exact linux-big and
+no driver code lives here — and each one depends on one exact kernel and
 one exact driver version. That is what keeps an update from breaking graphics:
 if a new kernel or a new NVIDIA driver is published before its module, pacman
 holds that update back instead of booting without a driver.
 
 Nobody rebuilds them by hand. The [watcher](.github/workflows/watch-manjaro.yml)
-compares, every 30 minutes and for both the testing and stable branches, what
-the modules should be — the driver users get, on the current linux-big — with
+compares, every 30 minutes, for every series and for both the testing and
+stable branches, what the modules should be — the driver users get, on that
+series' kernel — with
 what BigCommunity has published, and dispatches a build of every module that is
 behind. A build that does not get published, usually because of the network, is
 dispatched again once it is no longer running and at least half an hour has
@@ -309,10 +387,11 @@ of Manjaro is followed too. Both branches follow the drivers of Manjaro
 
 Which NVIDIA driver a machine has is decided by its Manjaro branch, not by
 BigCommunity's. So while Manjaro testing has a newer NVIDIA driver than stable,
-`linux-big-nvidia-open` and `linux-big-nvidia` carry a build for each — the
-version names both, stable's first, as in `610.57.04+615.71.09` — and a pacman
-hook points the system at the build of the installed `nvidia-utils`, through
-`/etc/depmod.d/linux-big-nvidia*.conf`. Moving between Manjaro branches
+the `nvidia-open` and `nvidia` modules carry a build for each — the version
+names both, stable's first, as in `610.57.04+615.71.09` — and a pacman hook
+points the system at the build of the installed `nvidia-utils`, through
+`/etc/depmod.d/linux-bigNN-nvidia*.conf`, one per series, each for its own
+kernel only. Moving between Manjaro branches
 switches the build by itself; nothing is compiled on the user's machine. Once
 both branches have the same driver, the package carries one build again.
 VirtualBox needs no such thing: its modules keep working across the 7.2
@@ -362,7 +441,7 @@ echo adios | sudo tee /sys/block/nvme0n1/queue/scheduler
 
 ```bash
 git clone https://github.com/big-comm/big-kernel
-cd big-kernel/linux-big
+cd big-kernel/linux-big73
 makepkg -s
 ```
 
@@ -377,23 +456,23 @@ MAKEFLAGS=-j8 nice makepkg -s
 Then install both packages; they go next to your current kernel:
 
 ```bash
-sudo pacman -U linux-big-*.pkg.tar.zst
+sudo pacman -U linux-big73-*.pkg.tar.zst
 ```
 
-Boot **linux-big** from the GRUB menu, and remove another kernel only once it
+Boot **linux-big73** from the GRUB menu, and remove another kernel only once it
 has booted fine.
 
 ### Build a module
 
-With `linux-big-headers` of the same version installed:
+With the kernel's headers of the same version installed:
 
 ```bash
-cd big-kernel/linux-big-nvidia-open   # or any linux-big-* directory
+cd big-kernel/linux-big73-nvidia-open   # or any linux-big73-* directory
 makepkg -s
-sudo pacman -U linux-big-nvidia-open-*.pkg.tar.zst
+sudo pacman -U linux-big73-nvidia-open-*.pkg.tar.zst
 ```
 
-The module reads the kernel version from `../linux-big/PKGBUILD` and the
+The module reads the kernel version from `../linux-big73/PKGBUILD` and the
 driver version from your repositories, so it builds for the kernel and driver
 you have.
 
@@ -401,7 +480,7 @@ you have.
 
 - A local build does not run the NVIDIA check the CI runs; it would install
   the NVIDIA driver on your machine.
-- To tweak the configuration, edit `linux-big/config`. The options listed in
+- To tweak the configuration, edit `linux-big73/config`. The options listed in
   `_required_options` in the PKGBUILD must stay: the build refuses to go on
   without them.
 
@@ -413,9 +492,11 @@ holds one directory per package, and the CI builds the one it is asked for.
 
 ```
 big-kernel/
-├── linux-big/                  # the kernel: PKGBUILD, config, patches
-├── linux-big-nvidia*/          # NVIDIA modules
-├── linux-big-broadcom-wl/      # Broadcom Wi-Fi module
+├── linux-big/                  # the metapackages: linux-big, linux-big-headers, linux-big-<module>
+├── linux-big73/                # the 7.3 kernel: PKGBUILD, config, patches
+├── linux-big73-nvidia*/        # its NVIDIA modules
+├── linux-big73-broadcom-wl/    # its Broadcom Wi-Fi module, and so on
+├── linux-big72/, linux-big72-*/  # the 7.2 kernel and its modules
 └── .github/
     ├── workflows/              # the kernel and module watchers
     ├── scripts/                # the watchers and their tests
@@ -427,6 +508,7 @@ big-kernel/
 ## Roadmap
 
 - [x] linux-big 7.2 — BORE, ADIOS, POC, Clang ThinLTO, Intel Xe fixes
+- [x] One package per kernel series, side by side; 7.3 with BORE 7.0.1 and POC 3.0.0
 - [x] Built ready for AutoFDO
 - [ ] Validation on Intel (Arrow Lake) and AMD (Zen 2) machines, and with NVIDIA DKMS
 - [ ] **linux-big-lts** — the 6.18 long-term series, as a conservative fallback

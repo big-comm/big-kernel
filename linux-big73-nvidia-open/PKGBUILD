@@ -1,0 +1,172 @@
+# Maintainer: Tales A. Mendonça <talesam@gmail.com>
+#
+# NVIDIA open kernel modules for linux-big (Turing and newer), built from nvidia-open-dkms.
+#
+# Nothing here is edited by hand when a driver or the kernel is updated:
+#   - the drivers are the nvidia-open-dkms of Manjaro stable -- the repositories
+#     the build runs against, asked from pacman -- and of Manjaro testing, read
+#     from its database;
+#   - the kernel is the linux-big described by ../<_kernel_pkg>/PKGBUILD, which
+#     sets the exact dependency and the pkgrel.
+#
+# Which nvidia-utils a machine has is decided by its Manjaro branch, not by
+# BigCommunity's, and a module only loads with the nvidia-utils it was built
+# for. So while Manjaro testing has a newer driver than stable, the package
+# carries a build for each, in extramodules/linux-big-nvidia-open/<driver>/,
+# and its pacman hook (linux-big-nvidia-select) points depmod at the one of
+# the installed nvidia-utils. pkgver names both drivers, stable's first:
+# 610.57.04+615.71.09. When the branches agree it is a single driver again.
+#
+# The dependency on the exact kernel is deliberate: when a new linux-big is
+# published before its modules, pacman holds the kernel update back instead
+# of booting a kernel without its NVIDIA driver.
+#
+# Do not reference the pkgname or url variables anywhere in this file: a
+# testing build in the CI expands them textually.
+
+# The kernel this directory builds for. linux-big72-<module> and
+# linux-big73-<module> are the same PKGBUILD but for this line.
+_kernel_pkg=linux-big73
+_kernel_pkgbuild=../$_kernel_pkg/PKGBUILD
+_kpkgver=$(sed -n 's/^pkgver=//p' "$_kernel_pkgbuild")
+_kpkgrel=$(sed -n 's/^pkgrel=//p' "$_kernel_pkgbuild")
+_kernel="${_kpkgver}-${_kpkgrel}"
+_kernver="${_kernel}-big"
+
+# pkgrel encodes the kernel, so every new linux-big is an upgrade of this
+# package too: 7.2.7-2 -> 7020702, 7.3.0-1 -> 7030001.
+_kernel_rel() {
+  local major minor patch
+  IFS=. read -r major minor patch <<< "$_kpkgver"
+  printf '%d%02d%02d%02d' "$major" "$minor" "${patch:-0}" "$_kpkgrel"
+}
+
+# A change here that must reach users on the same kernel and driver (a fixed
+# dependency, say) needs a new version: pacman does not reinstall an equal
+# one, and the repository's CDN keeps serving the old file under the old
+# name. Set _rebuild_for to the kernel it is for (_kernel, above) and
+# _rebuild to 1, 2...: pkgrel becomes 7020702.1. A new kernel ignores both,
+# so they never need resetting.
+_rebuild_for=
+_rebuild=
+_pkgrel() {
+  if [[ -n $_rebuild && $_rebuild_for == "$_kernel" ]]; then
+    echo "$(_kernel_rel).$_rebuild"
+  else
+    _kernel_rel
+  fi
+}
+
+# The version of a package in the repositories, without its pkgrel.
+_repo_version() {
+  LC_ALL=C pacman -Si "$1" 2>/dev/null | awk -F': ' '/^Version/ { sub(/-[^-]*$/, "", $2); print $2; exit }'
+}
+
+# Manjaro testing's nvidia-open-dkms: "version filename sha256", from its
+# database. Read over HTTPS from Manjaro's own server; the package is checked
+# against the database's sha256 (the build user cannot read pacman's keyring
+# to check its signature).
+_manjaro_testing=https://mirrors.manjaro.org/repo/testing/extra/x86_64
+_testing_entry() {
+  curl -sfL --retry 3 "$_manjaro_testing/extra.db" |
+    bsdtar -xOf - --include 'nvidia-open-dkms-[0-9]*/desc' |
+    awk '/^%VERSION%$/ { getline; version = $0 }
+         /^%FILENAME%$/ { getline; file = $0 }
+         /^%SHA256SUM%$/ { getline; sum = $0 }
+         END { if (version && file && sum) print version, file, sum }'
+}
+
+_check_kernel() {
+  local headers
+  headers="$(</usr/src/$_kernel_pkg/version)"
+  if [[ $headers != "$_kernver" ]]; then
+    error "$_kernel_pkg-headers is $headers, but $_kernel_pkgbuild describes $_kernver"
+    return 1
+  fi
+}
+
+_stable=$(_repo_version nvidia-open-dkms)
+read -r _testing_full _testing_file _testing_sum < <(_testing_entry)
+_testing=${_testing_full%-*}
+if [[ -z $_stable || -z $_testing ]]; then
+  # Building for stable alone would leave Manjaro testing users without a
+  # driver as soon as testing moves ahead; better no package.
+  echo "nvidia-open-dkms: Manjaro stable '$_stable', testing '$_testing'" >&2
+  exit 1
+fi
+_drivers=("$_stable")
+[[ $_testing != "$_stable" ]] && _drivers+=("$_testing")
+
+# nvidia-utils is accepted from the oldest to the newest driver built.
+_oldest=$_stable _newest=$_testing
+if (( $(vercmp "$_stable" "$_testing") > 0 )); then
+  _oldest=$_testing _newest=$_stable
+fi
+
+pkgname=$_kernel_pkg-nvidia-open
+pkgver=$(IFS=+; echo "${_drivers[*]}")
+pkgrel=$(_pkgrel)
+pkgdesc="NVIDIA open kernel modules for $_kernel_pkg (Turing and newer)"
+arch=('x86_64')
+url="https://www.nvidia.com/"
+license=('MIT AND GPL-2.0-only')
+groups=("$_kernel_pkg-extramodules")
+depends=("$_kernel_pkg=$_kernel" "nvidia-utils>=$_oldest" "nvidia-utils<=$_newest" 'libglvnd')
+makedepends=("$_kernel_pkg-headers=$_kernel" "nvidia-open-dkms=$_stable")
+provides=("${_drivers[@]/#/nvidia=}" 'NVIDIA-MODULE')
+conflicts=("$_kernel_pkg-nvidia")
+options=('!strip' '!debug')
+source=('nvidia-select'
+        'nvidia-open.hook'
+        'nvidia-open-remove.hook')
+sha256sums=('ce1572381988e5551c17c8eae627629ecefe79d02cd191b3eba5f547b64a359c'
+            '47fb92c522b6d8ae32cc8c84af514b922f0a4e087cce0d48f2edf1dc8ce9eac6'
+            'b271dee355d25ae224643c7cc56c1a359c6f0d8b5ad6f6d07540ef7774dcc9a1')
+# Saved under a name that does not end in .pkg.tar.zst: build-package
+# publishes every *.pkg.tar.zst left in the build directory, and on
+# 2026-10-08 it published Manjaro's own dkms package to BigCommunity.
+_testing_src=manjaro-testing-${_testing_file%.pkg.tar.zst}.tar.zst
+if [[ $_testing != "$_stable" ]]; then
+  source+=("$_testing_src::$_manjaro_testing/$_testing_file")
+  sha256sums+=("$_testing_sum")
+  noextract=("$_testing_src")
+fi
+
+prepare() {
+  if [[ $_testing != "$_stable" ]]; then
+    mkdir -p testing
+    bsdtar -xf "$_testing_src" -C testing usr/src
+  fi
+}
+
+build() {
+  _check_kernel
+  # dkms reads the kernel configuration and builds with Clang and ld.lld,
+  # as linux-big requires. Stable's sources are the installed
+  # nvidia-open-dkms; testing's, the package extracted in prepare().
+  mkdir -p "$srcdir/dkms"
+  fakeroot dkms build --dkmstree "$srcdir/dkms" -m "nvidia/$_stable" -k "$_kernver"
+  if [[ $_testing != "$_stable" ]]; then
+    fakeroot dkms build --dkmstree "$srcdir/dkms" --sourcetree "$srcdir/testing/usr/src" \
+      -m "nvidia/$_testing" -k "$_kernver"
+  fi
+}
+
+package() {
+  local driver
+  for driver in "${_drivers[@]}"; do
+    install -Dt "$pkgdir/usr/lib/modules/$_kernver/extramodules/$_kernel_pkg-nvidia-open/$driver" \
+      -m644 "dkms/nvidia/$driver/$_kernver/$CARCH/module/"*.ko*
+  done
+  find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +
+  # Named after the kernel: each series' package brings its own, and both
+  # series are installed side by side.
+  install -Dm755 nvidia-select "$pkgdir/usr/share/libalpm/scripts/$_kernel_pkg-nvidia-select"
+  local hook
+  for hook in nvidia-open nvidia-open-remove; do
+    sed "s/@KERNEL_PKG@/$_kernel_pkg/g" "$hook.hook" |
+      install -Dm644 /dev/stdin "$pkgdir/usr/share/libalpm/hooks/65-$_kernel_pkg-$hook.hook"
+  done
+  install -Dm644 /usr/share/licenses/nvidia-open-dkms/LICENSE \
+    "$pkgdir/usr/share/licenses/$_kernel_pkg-nvidia-open/LICENSE"
+}

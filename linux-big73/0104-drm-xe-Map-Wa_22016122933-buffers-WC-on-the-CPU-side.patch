@@ -1,0 +1,77 @@
+From: Navon John Lukose <navonjohnlukose@gmail.com>
+Date: Sun, 4 Oct 2026 03:51:45 +0530
+Subject: [PATCH] drm/xe: Map Wa_22016122933 buffers WC on the CPU side
+
+xe implements Wa_22016122933 by mapping the media GT's GuC-shared
+buffers uncached on the CPU side. i915 maps the same buffers WC on the
+CPU and UC on the GPU.
+
+CPU writes through the uncached mapping are slow, and xe clears and
+refills the ADS on every GuC load, so probe and every resume pay for
+it. On ARL-H, xe probe takes 3.1 s with UC and 0.35 s with WC, the same
+as without the workaround.
+
+Keep XE_BO_FLAG_NEEDS_UC, which also selects XE_CACHE_NONE for the GGTT
+PTEs, and add XE_BO_FLAG_FORCE_WC, which now makes the CPU mapping
+write-combined when both flags are set.
+
+Fixes: d5b0bf3f37f1 ("drm/xe: Implement Wa_22016122933")
+Signed-off-by: Navon John Lukose <navonjohnlukose@gmail.com>
+---
+---
+Tested on ARL-H 7d51 with this backported to 7.2.8. Probe time is dmesg
+"GT0: Using GuC firmware" to "Initialized xe": 3.10 and 3.15 s with UC,
+0.35-0.37 s with WC (3 boots), 0.35 s on stock Arch 7.2.8, which lacks
+the workaround.
+
+20 min of VAAPI decode with C-states 2/3 disabled (the reproducer from
+https://gitlab.freedesktop.org/drm/xe/kernel/-/work_items/8678): no TLB
+invalidation timeouts and no late acks, same as with UC.
+
+ drivers/gpu/drm/xe/xe_bo.c  | 7 ++++++-
+ drivers/gpu/drm/xe/xe_guc.c | 6 ++++--
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/drm/xe/xe_bo.c b/drivers/gpu/drm/xe/xe_bo.c
+index 6921b696733..763172b252f 100644
+--- a/drivers/gpu/drm/xe/xe_bo.c
++++ b/drivers/gpu/drm/xe/xe_bo.c
+@@ -533,7 +533,12 @@ static struct ttm_tt *xe_ttm_tt_create(struct ttm_buffer_object *ttm_bo,
+ 		 * which cpu_caching is never initialized.
+ 		 */
+ 		xe_assert(xe, bo->cpu_caching == 0);
+-		caching = ttm_uncached;
++		/*
++		 * With FORCE_WC also set, map WC on the CPU side. The GGTT PTEs
++		 * stay XE_CACHE_NONE because they key off NEEDS_UC alone.
++		 */
++		caching = bo->flags & XE_BO_FLAG_FORCE_WC ? ttm_write_combined :
++							    ttm_uncached;
+ 	}
+ 
+ 	if (ttm_bo->type != ttm_bo_type_sg)
+diff --git a/drivers/gpu/drm/xe/xe_guc.c b/drivers/gpu/drm/xe/xe_guc.c
+index 3ab4cb9e496..a39a42bfd0b 100644
+--- a/drivers/gpu/drm/xe/xe_guc.c
++++ b/drivers/gpu/drm/xe/xe_guc.c
+@@ -1476,13 +1476,15 @@ int xe_guc_suspend(struct xe_guc *guc)
+  * Wa_22016122933: on the standalone media GT, memory shared between the
+  * CPU and the GuC must not be mapped cached on the CPU side, otherwise
+  * the CPU can read stale data written by the GuC (e.g. G2H CTB writes)
+- * for multiple seconds.
++ * for multiple seconds. Map it WC on the CPU side and UC on the GPU side,
++ * as i915 does.
+  *
+  * Return: additional XE_BO_FLAG_* to use when allocating GuC-shared memory
+  */
+ u32 xe_guc_bo_wa_flags(struct xe_gt *gt)
+ {
+-	return XE_GT_WA(gt, 22016122933) ? XE_BO_FLAG_NEEDS_UC : 0;
++	return XE_GT_WA(gt, 22016122933) ?
++	       XE_BO_FLAG_NEEDS_UC | XE_BO_FLAG_FORCE_WC : 0;
+ }
+ 
+ void xe_guc_notify(struct xe_guc *guc)
+-- 
+2.56.0
+

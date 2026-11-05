@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tales A. Mendonça <talesam@gmail.com>
+Date: Sat, 4 Jul 2026 19:10:00 -0300
+Subject: [PATCH] drm/xe/mcr: Sanitize steering semaphore on GT resume
+
+The MCR steering semaphore can be left in a held state after a suspend
+cycle. The first MCR access after resume then stalls until the
+semaphore wait times out and logs:
+
+  Tile0: GT1: hardware MCR steering semaphore timed out
+
+as observed on an Arrow Lake-P system resuming from s2idle. Recovery
+currently only happens because mcr_unlock() releases the semaphore
+unconditionally.
+
+i915 addresses the same issue in intel_gt_resume_early() via
+intel_gt_mcr_lock_sanitize(), noting that the hardware team confirmed
+that forcibly releasing the semaphore is safe during driver
+load/resume because no other agents acquire it at that time.
+
+Port that to xe: release the steering semaphore at the start of
+xe_gt_resume(), before the first MCR access performed by
+do_gt_restart().
+
+Signed-off-by: Tales A. Mendonça <talesam@gmail.com>
+---
+diff --git a/drivers/gpu/drm/xe/xe_gt.c b/drivers/gpu/drm/xe/xe_gt.c
+--- a/drivers/gpu/drm/xe/xe_gt.c
++++ b/drivers/gpu/drm/xe/xe_gt.c
+@@ -1062,6 +1062,13 @@
+ 		return -ETIMEDOUT;
+ 	}
+ 
++	/*
++	 * The MCR steering semaphore may be left held across a suspend
++	 * cycle; release it before the first MCR access below so that
++	 * mcr_lock() does not stall until the semaphore wait times out.
++	 */
++	xe_gt_mcr_lock_sanitize(gt);
++
+ 	err = do_gt_restart(gt);
+ 	if (err)
+ 		return err;
+diff --git a/drivers/gpu/drm/xe/xe_gt_mcr.c b/drivers/gpu/drm/xe/xe_gt_mcr.c
+--- a/drivers/gpu/drm/xe/xe_gt_mcr.c
++++ b/drivers/gpu/drm/xe/xe_gt_mcr.c
+@@ -735,6 +735,28 @@
+ 	}
+ }
+ 
++/**
++ * xe_gt_mcr_lock_sanitize - Release the hardware MCR steering semaphore
++ * @gt: GT structure
++ *
++ * The MCR steering semaphore can be left in a held state after a suspend
++ * cycle, in which case the first MCR access after resume stalls until the
++ * semaphore wait times out.  Forcibly release the semaphore during driver
++ * load/resume; this is safe because no other agents acquire the semaphore
++ * during the load/resume process, mirroring i915's
++ * intel_gt_mcr_lock_sanitize().
++ */
++void xe_gt_mcr_lock_sanitize(struct xe_gt *gt)
++{
++	if (IS_SRIOV_VF(gt_to_xe(gt)))
++		return;
++
++	lockdep_assert_not_held(&gt->mcr_lock);
++
++	if (GRAPHICS_VERx100(gt_to_xe(gt)) >= 1270)
++		xe_mmio_write32(&gt->mmio, STEER_SEMAPHORE, 0x1);
++}
++
+ /*
+  * Access a register with specific MCR steering
+  *
+diff --git a/drivers/gpu/drm/xe/xe_gt_mcr.h b/drivers/gpu/drm/xe/xe_gt_mcr.h
+--- a/drivers/gpu/drm/xe/xe_gt_mcr.h
++++ b/drivers/gpu/drm/xe/xe_gt_mcr.h
+@@ -16,6 +16,7 @@
+ void xe_gt_mcr_init(struct xe_gt *gt);
+ 
+ void xe_gt_mcr_set_implicit_defaults(struct xe_gt *gt);
++void xe_gt_mcr_lock_sanitize(struct xe_gt *gt);
+ 
+ u32 xe_gt_mcr_unicast_read(struct xe_gt *gt, struct xe_reg_mcr mcr_reg,
+ 			   int group, int instance);
+-- 
+2.54.0

@@ -9,6 +9,7 @@ import io
 import json
 import lzma
 import os
+import re
 import sys
 import tarfile
 import tempfile
@@ -18,7 +19,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 import bump_kernel as bump  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-REAL_PKGBUILD = open(os.path.join(ROOT, "linux-big", "PKGBUILD"), encoding="utf-8").read()
+# The current series: the newest linux-bigNN directory.
+CURRENT = max((d for d in os.listdir(ROOT) if re.fullmatch(r"linux-big[0-9]+", d)), key=lambda d: int(d[9:]))
+REAL_PKGBUILD = open(os.path.join(ROOT, CURRENT, "PKGBUILD"), encoding="utf-8").read()
 
 
 def releases(*entries):
@@ -121,7 +124,7 @@ class Failure(unittest.TestCase):
 
 PKGBUILD = """\
 _basekernel=7.2
-pkgbase=linux-big
+pkgbase=linux-big72
 pkgver=7.2.6
 pkgrel=3
 source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
@@ -157,7 +160,7 @@ class Main(unittest.TestCase):
         self.work = tempfile.TemporaryDirectory()
         base = self.work.name
         self.root, self.cache = os.path.join(base, "repo"), os.path.join(base, "cache")
-        self.kernel = os.path.join(self.root, "linux-big")
+        self.kernel = os.path.join(self.root, "linux-big72")
         os.makedirs(self.kernel)
         os.makedirs(self.cache)
         with tarfile.open(os.path.join(self.cache, "linux-7.2.tar.xz"), "w:xz") as archive:
@@ -185,8 +188,8 @@ class Main(unittest.TestCase):
 
     def run_watcher(self, listed):
         json.dump(listed, open(self.releases, "w"))
-        argv = ["bump_kernel.py", "--root", self.root, "--cache", self.cache, "--releases", self.releases,
-                "--result", self.result, "--no-prepare"]
+        argv = ["bump_kernel.py", "--root", self.root, "--kernel", "linux-big72", "--cache", self.cache,
+                "--releases", self.releases, "--result", self.result, "--no-prepare"]
         old, sys.argv = sys.argv, argv
         try:
             self.assertEqual(bump.main(), 0)
@@ -233,6 +236,20 @@ class Main(unittest.TestCase):
         result = self.run_watcher(KERNEL_ORG)
         self.assertEqual(result["dropped"], [])
         self.assertEqual(bump.source_entries(self.pkgbuild())[3:], ["0001-broken.patch", "0002-merged.patch"])
+
+    def test_the_result_names_the_series_package(self):
+        self.series([("0001-a.patch", diff("a.c", A, A_OURS))])
+        self.assertEqual(self.run_watcher(KERNEL_ORG)["kernel"], "linux-big72")
+
+    def test_only_a_series_directory_is_taken(self):
+        for kernel in ("linux-big", "linux-big73-zfs", "../linux-big72"):
+            argv = ["bump_kernel.py", "--root", self.root, "--kernel", kernel, "--releases", self.releases]
+            old, sys.argv = sys.argv, argv
+            try:
+                with self.subTest(kernel=kernel), self.assertRaises(SystemExit):
+                    bump.main()
+            finally:
+                sys.argv = old
 
     def test_nothing_changes_when_current(self):
         self.series([("0001-ours.patch", diff("a.c", A, A_OURS))])

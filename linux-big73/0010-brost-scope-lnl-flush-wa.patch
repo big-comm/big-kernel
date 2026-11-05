@@ -1,0 +1,459 @@
+From patchwork Wed Jul 22 21:59:34 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Subject: [RFC,1/2] drm/xe: Scope LNL_FLUSH_* workaround to affected CPUs,
+ not GPU platform
+From: Matthew Brost <matthew.brost@intel.com>
+X-Patchwork-Id: 741913
+Message-Id: <20260722215935.1369012-2-matthew.brost@intel.com>
+To: intel-xe@lists.freedesktop.org
+Cc: =?UTF-8?q?Tales=20A=20=2E=20Mendon=C3=A7a?= <talesam@gmail.com>
+Date: Wed, 22 Jul 2026 14:59:34 -0700
+
+The LNL_FLUSH_WORKQUEUE()/LNL_FLUSH_WORK() workaround exists because
+some Intel hybrid (Performance + Efficiency core) client CPUs can
+delay workqueue worker scheduling by more than a second, causing
+spurious G2H timeouts. This is purely a host CPU scheduling issue, but
+the workaround was unconditionally applied on every platform,
+regardless of the actual CPU it's paired with (e.g. a discrete GPU
+attached to an unaffected CPU still paid the cost, while an affected
+CPU paired with any other GPU was never covered).
+
+Add xe_cpu_info.c/h (modeled on i915's intel_cpu_info.c) to detect the
+affected CPUs (Alder Lake through Arrow Lake) via x86_match_cpu(), and
+store the result in xe->info.needs_flush_wa at probe time. The
+workaround is now only applied when this bit is set, independent of
+xe->info.platform.
+
+Also add loud diagnostics around the workaround:
+
+ - xe_wait_user_fence.c: bump the 'WA resolved timeout' message from
+   drm_dbg to drm_warn and gate it on the WA flag.
+ - xe_tlb_inval.c: the TLB invalidation timeout path was missing a
+   complaint when the WA-driven flush actually resolved pending
+   fences before they were reported as timed out; add one.
+ - xe_guc_ct.c: add xe_guc_ct_flush_g2h_worker(), which detects
+   (best-effort, since the workqueue API offers no way to prove a
+   work item's scheduling was delayed) whether the G2H ring has
+   messages available but the G2H worker is neither queued nor
+   running, warns loudly when so, and re-queues the worker before
+   flushing. Use this instead of raw LNL_FLUSH_WORK() in both call
+   sites and drop the now-unused macro.
+ - xe_guc_ct.c: warn in receive_g2h() when we bail out because we
+   can't get a runtime PM reference and aren't in a PM callback,
+   since pending G2H may be silently dropped in that case.
+
+Cc: Tales A. Mendonça <talesam@gmail.com>
+Signed-off-by: Matthew Brost <matthew.brost@intel.com>
+Assisted-by: GitHub Copilot:claude-sonnet-5
+---
+ drivers/gpu/drm/xe/Makefile             |  1 +
+ drivers/gpu/drm/xe/xe_cpu_info.c        | 67 +++++++++++++++++++++++++
+ drivers/gpu/drm/xe/xe_cpu_info.h        | 13 +++++
+ drivers/gpu/drm/xe/xe_device.h          | 35 +++++++++----
+ drivers/gpu/drm/xe/xe_device_types.h    |  9 ++++
+ drivers/gpu/drm/xe/xe_guc_ct.c          | 56 +++++++++++++++++++--
+ drivers/gpu/drm/xe/xe_guc_ct.h          |  1 +
+ drivers/gpu/drm/xe/xe_guc_tlb_inval.c   |  2 +-
+ drivers/gpu/drm/xe/xe_pci.c             |  9 ++++
+ drivers/gpu/drm/xe/xe_tlb_inval.c       | 28 +++++++++++
+ drivers/gpu/drm/xe/xe_wait_user_fence.c |  6 ++-
+ 11 files changed, 210 insertions(+), 17 deletions(-)
+ create mode 100644 drivers/gpu/drm/xe/xe_cpu_info.c
+ create mode 100644 drivers/gpu/drm/xe/xe_cpu_info.h
+
+diff --git a/drivers/gpu/drm/xe/Makefile b/drivers/gpu/drm/xe/Makefile
+index 67ada1d6c2fb..0a317d6b69f3 100644
+--- a/drivers/gpu/drm/xe/Makefile
++++ b/drivers/gpu/drm/xe/Makefile
+@@ -35,6 +35,7 @@ $(obj)/generated/%_device_wa_oob.c $(obj)/generated/%_device_wa_oob.h: $(obj)/xe
+ xe-y += xe_bb.o \
+ 	xe_bo.o \
+ 	xe_bo_evict.o \
++	xe_cpu_info.o \
+ 	xe_dep_scheduler.o \
+ 	xe_devcoredump.o \
+ 	xe_device.o \
+diff --git a/drivers/gpu/drm/xe/xe_cpu_info.c b/drivers/gpu/drm/xe/xe_cpu_info.c
+new file mode 100644
+index 000000000000..29cbd540f8cb
+--- /dev/null
++++ b/drivers/gpu/drm/xe/xe_cpu_info.c
+@@ -0,0 +1,67 @@
++// SPDX-License-Identifier: MIT
++/*
++ * Copyright © 2025 Intel Corporation
++ *
++ * Avoid INTEL_<PLATFORM> name collisions between asm/intel-family.h and
++ * xe_platform_types.h by having a separate file.
++ */
++
++#include "xe_cpu_info.h"
++
++#ifdef CONFIG_X86
++#include <asm/cpu_device_id.h>
++#include <asm/intel-family.h>
++
++/*
++ * Intel hybrid (Performance + Efficiency core) client CPUs up to and
++ * including Arrow Lake are known to occasionally delay scheduling of
++ * workqueue workers by more than a second, even after the work has been
++ * queued and the workqueue activated. This is caused by P/E core scheduling
++ * behavior on the host CPU and is unrelated to which GPU is attached,
++ * including a discrete GPU, so this cannot be inferred from the GPU
++ * platform.
++ *
++ * Platforms newer than Arrow Lake are intentionally excluded here: the issue
++ * has not been reproduced on them and this list should not be grown without
++ * new evidence the workaround is required.
++ */
++static const struct x86_cpu_id hybrid_flush_wa_cpu_ids[] = {
++	X86_MATCH_VFM(INTEL_ALDERLAKE,		NULL),
++	X86_MATCH_VFM(INTEL_ALDERLAKE_L,	NULL),
++	X86_MATCH_VFM(INTEL_RAPTORLAKE,		NULL),
++	X86_MATCH_VFM(INTEL_RAPTORLAKE_P,	NULL),
++	X86_MATCH_VFM(INTEL_RAPTORLAKE_S,	NULL),
++	X86_MATCH_VFM(INTEL_METEORLAKE,		NULL),
++	X86_MATCH_VFM(INTEL_METEORLAKE_L,	NULL),
++	X86_MATCH_VFM(INTEL_LUNARLAKE_M,	NULL),
++	X86_MATCH_VFM(INTEL_ARROWLAKE,		NULL),
++	X86_MATCH_VFM(INTEL_ARROWLAKE_H,	NULL),
++	X86_MATCH_VFM(INTEL_ARROWLAKE_U,	NULL),
++	{}
++};
++
++/**
++ * xe_cpu_has_hybrid_flush_wa - detect a CPU affected by the hybrid
++ * scheduling latency issue
++ *
++ * Matches the running CPU against the set of Intel hybrid client CPUs (up to
++ * and including Arrow Lake) that are known to exhibit excessive workqueue
++ * worker scheduling latency. The workaround this feeds into is a host CPU
++ * property, not a GPU platform property, and applies regardless of which GPU
++ * (including a discrete GPU) is attached to the affected CPU.
++ *
++ * Return: %true if the current CPU is known to be affected, %false
++ * otherwise.
++ */
++bool xe_cpu_has_hybrid_flush_wa(void)
++{
++	return x86_match_cpu(hybrid_flush_wa_cpu_ids);
++}
++#else /* CONFIG_X86 */
++
++bool xe_cpu_has_hybrid_flush_wa(void)
++{
++	return false;
++}
++
++#endif /* CONFIG_X86 */
+diff --git a/drivers/gpu/drm/xe/xe_cpu_info.h b/drivers/gpu/drm/xe/xe_cpu_info.h
+new file mode 100644
+index 000000000000..031e8a4096ee
+--- /dev/null
++++ b/drivers/gpu/drm/xe/xe_cpu_info.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: MIT */
++/*
++ * Copyright © 2025 Intel Corporation
++ */
++
++#ifndef _XE_CPU_INFO_H_
++#define _XE_CPU_INFO_H_
++
++#include <linux/types.h>
++
++bool xe_cpu_has_hybrid_flush_wa(void);
++
++#endif /* _XE_CPU_INFO_H_ */
+diff --git a/drivers/gpu/drm/xe/xe_device.h b/drivers/gpu/drm/xe/xe_device.h
+index a03760d0ce38..6fe9fcc80063 100644
+--- a/drivers/gpu/drm/xe/xe_device.h
++++ b/drivers/gpu/drm/xe/xe_device.h
+@@ -235,18 +235,35 @@ static inline bool xe_device_is_admin_only(const struct xe_device *xe)
+ }
+ #endif
+ 
+-/*
++/**
++ * xe_device_has_flush_wa() - Whether the running host CPU needs the
++ * workqueue/work flush workaround
++ * @xe: xe device
++ *
+  * Occasionally it is seen that the G2H worker starts running after a delay of more than
+  * a second even after being queued and activated by the Linux workqueue subsystem. This
+- * leads to G2H timeout error. The root cause of issue lies with scheduling latency of
+- * Lunarlake Hybrid CPU. Issue disappears if we disable Lunarlake atom cores from BIOS
+- * and this is beyond xe kmd.
++ * leads to G2H timeout errors. The root cause lies with the scheduling latency of Intel
++ * hybrid (Performance + Efficiency core) CPUs up to and including Arrow Lake, and is
++ * independent of which GPU is attached to the affected CPU -- a discrete GPU on an
++ * affected CPU can hit this just the same as an integrated one. Because of that, this
++ * cannot be scoped by xe->info.platform; xe->info.needs_flush_wa is set at probe time
++ * based on the actual host CPU.
++ *
++ * Return: %true if flush_workqueue()/flush_work() should be used to work around the
++ * scheduling latency, %false otherwise.
+  *
+- * TODO: Drop this change once workqueue scheduling delay issue is fixed on LNL Hybrid CPU.
++ * TODO: Drop this workaround once the workqueue scheduling delay issue is fixed on the
++ * affected hybrid CPUs.
+  */
+-#define LNL_FLUSH_WORKQUEUE(wq__) \
+-	flush_workqueue(wq__)
+-#define LNL_FLUSH_WORK(wrk__) \
+-	flush_work(wrk__)
++static inline bool xe_device_has_flush_wa(struct xe_device *xe)
++{
++	return xe->info.needs_flush_wa;
++}
++
++#define LNL_FLUSH_WORKQUEUE(xe__, wq__) \
++	do { \
++		if (xe_device_has_flush_wa(xe__)) \
++			flush_workqueue(wq__); \
++	} while (0)
+ 
+ #endif
+diff --git a/drivers/gpu/drm/xe/xe_device_types.h b/drivers/gpu/drm/xe/xe_device_types.h
+index 860ad322237f..853a39579686 100644
+--- a/drivers/gpu/drm/xe/xe_device_types.h
++++ b/drivers/gpu/drm/xe/xe_device_types.h
+@@ -223,6 +223,15 @@ struct xe_device {
+ 		u8 skip_pcode:1;
+ 		/** @info.needs_shared_vf_gt_wq: needs shared GT WQ on VF */
+ 		u8 needs_shared_vf_gt_wq:1;
++		/**
++		 * @info.needs_flush_wa: Set if the host CPU is affected by a
++		 * scheduling latency issue that can delay workqueue worker
++		 * execution by more than a second. This is a property of the
++		 * host CPU (hybrid Performance + Efficiency core designs up
++		 * to and including Arrow Lake), not of the GPU platform, so
++		 * it must not be inferred from xe->info.platform.
++		 */
++		u8 needs_flush_wa:1;
+ 	} info;
+ 
+ 	/** @wa_active: keep track of active workarounds */
+diff --git a/drivers/gpu/drm/xe/xe_guc_ct.c b/drivers/gpu/drm/xe/xe_guc_ct.c
+index fe70c0fd85c5..4555b9745a50 100644
+--- a/drivers/gpu/drm/xe/xe_guc_ct.c
++++ b/drivers/gpu/drm/xe/xe_guc_ct.c
+@@ -1135,6 +1135,11 @@ static void kick_reset(struct xe_guc_ct *ct)
+ 
+ static int dequeue_one_g2h(struct xe_guc_ct *ct);
+ 
++static bool g2h_avail(struct xe_guc_ct *ct)
++{
++	return desc_read(ct_to_xe(ct), (&ct->ctbs.g2h), tail) != ct->ctbs.g2h.info.head;
++}
++
+ /*
+  * wait before retry of sending h2g message
+  * Return: true if ready for retry, false if the wait timeouted
+@@ -1176,12 +1181,9 @@ static bool guc_ct_send_wait_for_retry(struct xe_guc_ct *ct, u32 len,
+ 						 GUC_CTB_HXG_MSG_MAX_LEN :
+ 						 g2h_len);
+ 
+-#define g2h_avail(ct)	\
+-	(desc_read(ct_to_xe(ct), (&ct->ctbs.g2h), tail) != ct->ctbs.g2h.info.head)
+ 		if (!wait_event_timeout(ct->wq, !ct->g2h_outstanding ||
+ 					g2h_avail(ct), HZ))
+ 			return false;
+-#undef g2h_avail
+ 
+ 		ret = dequeue_one_g2h(ct);
+ 		if (ret < 0) {
+@@ -1377,7 +1379,7 @@ static int guc_ct_send_recv(struct xe_guc_ct *ct, const u32 *action, u32 len,
+ wait_again:
+ 	ret = wait_event_timeout(ct->g2h_fence_wq, READ_ONCE(g2h_fence.done), HZ);
+ 	if (!ret) {
+-		LNL_FLUSH_WORK(&ct->g2h_worker);
++		xe_guc_ct_flush_g2h_worker(ct);
+ 		if (READ_ONCE(g2h_fence.done)) {
+ 			xe_gt_warn(gt, "G2H fence %u, action %04x, done\n",
+ 				   g2h_fence.seqno, action[0]);
+@@ -2020,8 +2022,19 @@ static void receive_g2h(struct xe_guc_ct *ct)
+ 	 * completing, creating a deadlock.
+ 	 */
+ 	ongoing = xe_pm_runtime_get_if_active(ct_to_xe(ct));
+-	if (!ongoing && xe_pm_read_callback_task(ct_to_xe(ct)) == NULL)
++	if (!ongoing && xe_pm_read_callback_task(ct_to_xe(ct)) == NULL) {
++		/*
++		 * We were woken to process G2H (e.g. by an interrupt) but
++		 * couldn't get a runtime PM ref and aren't inside a PM
++		 * callback either. Any pending G2H will not be processed
++		 * until the next wake and, per the comment above, may be
++		 * lost entirely if we are fully suspended before then - warn
++		 * loudly so this isn't silently swallowed.
++		 */
++		xe_gt_warn(ct_to_gt(ct),
++			  "G2H worker woken w/o PM ref, dropping pending G2H\n");
+ 		return;
++	}
+ 
+ 	do {
+ 		mutex_lock(&ct->lock);
+@@ -2046,6 +2059,39 @@ static void g2h_worker_func(struct work_struct *w)
+ 	receive_g2h(ct);
+ }
+ 
++/**
++ * xe_guc_ct_flush_g2h_worker() - Flush the G2H worker, working around and
++ * detecting the hybrid CPU workqueue scheduling latency issue
++ * @ct: GuC CT object
++ *
++ * On CPUs affected by the hybrid P/E core scheduling latency issue (see
++ * xe_device_has_flush_wa()), flush_work() may be waiting on a worker that the
++ * workqueue subsystem has not actually scheduled to run yet. If the G2H ring
++ * buffer already has messages available (head != tail) but @ct->g2h_worker is
++ * neither queued nor running, that is exactly this scenario: warn loudly, as
++ * it means the WA is doing real work, and (re)queue the worker so
++ * flush_work() has something to wait on.
++ *
++ * There is no workqueue API to prove a work item's scheduling was actually
++ * delayed (as opposed to, e.g., not being queued at all for an unrelated
++ * reason), so this is only a best-effort detection, not a guarantee.
++ */
++void xe_guc_ct_flush_g2h_worker(struct xe_guc_ct *ct)
++{
++	struct xe_device *xe = ct_to_xe(ct);
++
++	if (!xe_device_has_flush_wa(xe))
++		return;
++
++	if (g2h_avail(ct) && !work_busy(&ct->g2h_worker)) {
++		xe_gt_warn(ct_to_gt(ct),
++			  "G2H worker not queued/running, CPU flush WA engaging\n");
++		queue_work(ct->g2h_wq, &ct->g2h_worker);
++	}
++
++	flush_work(&ct->g2h_worker);
++}
++
+ static struct xe_guc_ct_snapshot *guc_ct_snapshot_alloc(struct xe_guc_ct *ct, bool atomic,
+ 							bool want_ctb)
+ {
+diff --git a/drivers/gpu/drm/xe/xe_guc_ct.h b/drivers/gpu/drm/xe/xe_guc_ct.h
+index 767365a33dee..b8cfe1217cf8 100644
+--- a/drivers/gpu/drm/xe/xe_guc_ct.h
++++ b/drivers/gpu/drm/xe/xe_guc_ct.h
+@@ -22,6 +22,7 @@ void xe_guc_ct_runtime_suspend(struct xe_guc_ct *ct);
+ void xe_guc_ct_stop(struct xe_guc_ct *ct);
+ void xe_guc_ct_flush_and_stop(struct xe_guc_ct *ct);
+ void xe_guc_ct_fast_path(struct xe_guc_ct *ct);
++void xe_guc_ct_flush_g2h_worker(struct xe_guc_ct *ct);
+ 
+ struct xe_guc_ct_snapshot *xe_guc_ct_snapshot_capture(struct xe_guc_ct *ct);
+ void xe_guc_ct_snapshot_print(struct xe_guc_ct_snapshot *snapshot, struct drm_printer *p);
+diff --git a/drivers/gpu/drm/xe/xe_guc_tlb_inval.c b/drivers/gpu/drm/xe/xe_guc_tlb_inval.c
+index 046d0655122f..6047e7c44362 100644
+--- a/drivers/gpu/drm/xe/xe_guc_tlb_inval.c
++++ b/drivers/gpu/drm/xe/xe_guc_tlb_inval.c
+@@ -327,7 +327,7 @@ static void tlb_inval_flush(struct xe_tlb_inval *tlb_inval)
+ {
+ 	struct xe_guc *guc = tlb_inval->private;
+ 
+-	LNL_FLUSH_WORK(&guc->ct.g2h_worker);
++	xe_guc_ct_flush_g2h_worker(&guc->ct);
+ }
+ 
+ static long tlb_inval_timeout_delay(struct xe_tlb_inval *tlb_inval)
+diff --git a/drivers/gpu/drm/xe/xe_pci.c b/drivers/gpu/drm/xe/xe_pci.c
+index 123ffd4c1ee9..4d6e1b544188 100644
+--- a/drivers/gpu/drm/xe/xe_pci.c
++++ b/drivers/gpu/drm/xe/xe_pci.c
+@@ -19,6 +19,7 @@
+ #include "regs/xe_gt_regs.h"
+ #include "regs/xe_regs.h"
+ #include "xe_configfs.h"
++#include "xe_cpu_info.h"
+ #include "xe_device.h"
+ #include "xe_drv.h"
+ #include "xe_gt.h"
+@@ -820,6 +821,14 @@ static int xe_info_init_early(struct xe_device *xe,
+ 	xe->info.needs_shared_vf_gt_wq = desc->needs_shared_vf_gt_wq;
+ 	xe->info.multi_lrc_mask = desc->multi_lrc_mask;
+ 
++	/*
++	 * The hybrid P/E core scheduling latency workaround is a property of
++	 * the host CPU, not of the GPU platform: a CPU affected by it can be
++	 * paired with a discrete GPU, so this cannot be derived from
++	 * desc/platform.
++	 */
++	xe->info.needs_flush_wa = xe_cpu_has_hybrid_flush_wa();
++
+ 	xe->info.probe_display = IS_ENABLED(CONFIG_DRM_XE_DISPLAY) &&
+ 				 xe_modparam.probe_display &&
+ 				 desc->has_display &&
+diff --git a/drivers/gpu/drm/xe/xe_tlb_inval.c b/drivers/gpu/drm/xe/xe_tlb_inval.c
+index bbd21d393062..be12904cc65a 100644
+--- a/drivers/gpu/drm/xe/xe_tlb_inval.c
++++ b/drivers/gpu/drm/xe/xe_tlb_inval.c
+@@ -5,6 +5,7 @@
+ 
+ #include <drm/drm_managed.h>
+ 
++#include "xe_device.h"
+ #include "xe_device_types.h"
+ #include "xe_force_wake.h"
+ #include "xe_gt_stats.h"
+@@ -73,10 +74,37 @@ static void xe_tlb_inval_fence_timeout(struct work_struct *work)
+ 	struct xe_device *xe = tlb_inval->xe;
+ 	struct xe_tlb_inval_fence *fence, *next;
+ 	long timeout_delay = tlb_inval->ops->timeout_delay(tlb_inval);
++	bool flush_wa = xe_device_has_flush_wa(xe);
++	unsigned int pending_before = 0;
++
++	if (flush_wa) {
++		spin_lock_irq(&tlb_inval->pending_lock);
++		list_for_each_entry(fence, &tlb_inval->pending_fences, link)
++			pending_before++;
++		spin_unlock_irq(&tlb_inval->pending_lock);
++	}
+ 
+ 	tlb_inval->ops->flush(tlb_inval);
+ 
+ 	spin_lock_irq(&tlb_inval->pending_lock);
++	if (flush_wa && pending_before) {
++		unsigned int pending_after = 0;
++
++		list_for_each_entry(fence, &tlb_inval->pending_fences, link)
++			pending_after++;
++
++		/*
++		 * If the flush forced by the hybrid CPU scheduling latency
++		 * workaround caused fences that were about to be reported as
++		 * timed out to be signaled instead, the underlying scheduling
++		 * delay this workaround papers over really did happen here.
++		 * Complain loudly so this doesn't go unnoticed.
++		 */
++		if (pending_after < pending_before)
++			drm_err(&xe->drm,
++				"CPU flush WA resolved %u pending TLB inval fence(s)\n",
++				pending_before - pending_after);
++	}
+ 	list_for_each_entry_safe(fence, next,
+ 				 &tlb_inval->pending_fences, link) {
+ 		s64 since_inval_ms = ktime_ms_delta(ktime_get(),
+diff --git a/drivers/gpu/drm/xe/xe_wait_user_fence.c b/drivers/gpu/drm/xe/xe_wait_user_fence.c
+index 51eb940ceb4e..ba29ad3840dc 100644
+--- a/drivers/gpu/drm/xe/xe_wait_user_fence.c
++++ b/drivers/gpu/drm/xe/xe_wait_user_fence.c
+@@ -154,11 +154,13 @@ int xe_wait_user_fence_ioctl(struct drm_device *dev, void *data,
+ 		}
+ 
+ 		if (!timeout) {
+-			LNL_FLUSH_WORKQUEUE(xe->ordered_wq);
++			LNL_FLUSH_WORKQUEUE(xe, xe->ordered_wq);
+ 			err = do_compare(addr, args->value, args->mask,
+ 					 args->op);
+ 			if (err <= 0) {
+-				drm_dbg(&xe->drm, "LNL_FLUSH_WORKQUEUE resolved ufence timeout\n");
++				if (xe_device_has_flush_wa(xe))
++					drm_warn(&xe->drm,
++						 "LNL_FLUSH_WORKQUEUE resolved ufence timeout\n");
+ 				break;
+ 			}
+ 			err = -ETIME;
