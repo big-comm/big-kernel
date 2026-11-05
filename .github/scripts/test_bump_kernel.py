@@ -281,5 +281,75 @@ class Main(unittest.TestCase):
         self.assertEqual(self.pkgbuild(), before)
 
 
+def bash_array(text, name):
+    """The words of a literal bash array assignment, quotes removed and
+    comments left out; None when the PKGBUILD has none."""
+    match = re.search(rf"^{name}=\(", text, re.M)
+    if not match:
+        return None
+    words, word, quote, i = [], None, None, match.end()
+    while i < len(text):
+        char = text[i]
+        if quote:
+            if char == quote:
+                quote = None
+            else:
+                word += char
+        elif char in "'\"":
+            quote, word = char, word or ""
+        elif char == "#" and word is None:
+            i = text.find("\n", i)
+            continue
+        elif char == "$" and text[i + 1 : i + 2] == "(":
+            depth = 0
+            while i < len(text):
+                depth += {"(": 1, ")": -1}.get(text[i], 0)
+                word = (word or "") + text[i]
+                if depth == 0:
+                    break
+                i += 1
+        elif char.isspace() or char == ")":
+            if word is not None:
+                words.append(word)
+                word = None
+            if char == ")":
+                return words
+        else:
+            word = (word or "") + char
+        i += 1
+    return words
+
+
+class LocalSources(unittest.TestCase):
+    """Every file a PKGBUILD lists from its own directory matches its checksum.
+
+    makepkg -e skips the check, and a build that reuses its tree never sees
+    a wrong one: on 2026-11-05 linux-big73 reached the CI with the checksum
+    of the config before it was resolved, and failed there.
+    """
+
+    def test_every_local_source_matches_its_checksum(self):
+        checked = 0
+        for directory in sorted(os.listdir(ROOT)):
+            pkgbuild = os.path.join(ROOT, directory, "PKGBUILD")
+            if not directory.startswith("linux-big") or not os.path.isfile(pkgbuild):
+                continue
+            with open(pkgbuild, encoding="utf-8") as source:
+                text = source.read()
+            entries, sums = bash_array(text, "source"), bash_array(text, "sha256sums")
+            if entries is None or sums is None:
+                continue
+            for entry, expected in zip(entries, sums):
+                if "://" in entry or "$" in entry or expected == "SKIP":
+                    continue
+                path = os.path.join(ROOT, directory, entry)
+                with self.subTest(file=f"{directory}/{entry}"):
+                    self.assertTrue(os.path.isfile(path), "listed in source=() but missing")
+                    with open(path, "rb") as data:
+                        self.assertEqual(hashlib.sha256(data.read()).hexdigest(), expected)
+                    checked += 1
+        self.assertGreater(checked, 40)
+
+
 if __name__ == "__main__":
     unittest.main()
