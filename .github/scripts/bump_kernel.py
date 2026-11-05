@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Move linux-big to the newest kernel.org release of its series.
+"""Move a linux-big series to the newest kernel.org release of that series.
 
-Runs unattended. When kernel.org has a newer stable release of the series in
-linux-big/PKGBUILD (_basekernel), it:
+Runs unattended, once per series (--kernel linux-big73). When kernel.org has
+a newer stable release of the series in <kernel>/PKGBUILD (_basekernel), it:
 
   1. sets pkgver to it and pkgrel to 1, with the checksum of its patch;
   2. drops the patches that reached the kernel in that release: applied in
@@ -15,7 +15,8 @@ newer release), "bumped" (the PKGBUILD was updated and prepare() passed),
 "failed" (it did not; nothing should be built) or "eol" (the series reached
 its end of life and moving to the next one is a decision for a person). The
 last release of a series comes already marked end of life: it is bumped to
-all the same, with "eol": true in the result.
+all the same, with "eol": true in the result. "kernel" names the series'
+package.
 """
 
 import argparse
@@ -183,6 +184,7 @@ def prepare_tree(workdir, tarball, stable_patch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=".", help="the big-kernel repository")
+    parser.add_argument("--kernel", required=True, help="the series' directory: linux-big73")
     parser.add_argument("--cache", default=os.path.expanduser("~/.cache/big-kernel"), help="downloads")
     parser.add_argument("--result", default="bump-result.json")
     parser.add_argument("--releases", help="a releases.json to use instead of kernel.org's")
@@ -192,13 +194,15 @@ def main():
     # Before any early return: the workflow caches this directory, and a run
     # with nothing to download must still leave it there.
     os.makedirs(args.cache, exist_ok=True)
-    pkgbuild = os.path.join(args.root, "linux-big", "PKGBUILD")
+    if not re.fullmatch(r"linux-big[0-9]+", args.kernel):
+        raise SystemExit(f"--kernel: expected linux-bigNN, got {args.kernel!r}")
+    pkgbuild = os.path.join(args.root, args.kernel, "PKGBUILD")
     text = open(pkgbuild, encoding="utf-8").read()
     current = pkgbuild_value(text, "pkgver")
     series = pkgbuild_value(text, "_basekernel")
 
     def finish(status, **details):
-        result = {"status": status, "series": series, "from": current, **details}
+        result = {"status": status, "kernel": args.kernel, "series": series, "from": current, **details}
         json.dump(result, open(args.result, "w", encoding="utf-8"), indent=2)
         log(json.dumps(result, indent=2))
         return 0
@@ -214,7 +218,7 @@ def main():
         return finish("current", to=latest)
     if eol:
         finish = _with_eol(finish, reason)
-    log(f"linux-big {current} -> {latest}")
+    log(f"{args.kernel} {current} -> {latest}")
 
     cdn = CDN.format(major=series.split(".")[0])
     downloads = {}

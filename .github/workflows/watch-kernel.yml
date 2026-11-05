@@ -1,14 +1,16 @@
 name: 🐧 Follow the kernel series
 
-# Moves linux-big to each new kernel.org release of its series (7.2.8,
-# 7.2.9, ...): updates the PKGBUILD, drops the patches that reached the
-# kernel, runs prepare() to prove every patch and option still holds, then
-# commits. It builds nothing itself: the module watcher sees the PKGBUILD
+# Moves each kernel series in the repository (linux-big72, linux-big73, ...)
+# to each new kernel.org release of that series (7.3.1, 7.3.2, ...): updates
+# the PKGBUILD, drops the patches that reached the kernel, runs prepare() to
+# prove every patch and option still holds, then commits. It builds nothing itself: the module watcher sees the PKGBUILD
 # ahead of testing, sends the kernel to be built for testing, and then the
 # modules once it is published -- so a dispatch that fails is retried.
 #
-# When prepare() fails, or the series reaches its end of life, it opens an
-# issue instead: fixing a patch and choosing the next series are for a person.
+# When prepare() fails, or the current series reaches its end of life, it
+# opens an issue instead: fixing a patch and choosing the next series are for
+# a person. An older series that reached its end of life is kept as it is,
+# for the machines that still boot it, and is not reported again.
 # So is moving testing to stable. See .github/scripts/bump_kernel.py.
 
 on:
@@ -50,96 +52,113 @@ jobs:
       - name: Test the watcher
         run: python3 -m unittest discover -s .github/scripts -v
 
-      # The kernel tarball is the same for the whole series.
+      # A kernel tarball is the same for a whole series.
       - name: Restore downloads
         uses: actions/cache@v4
         with:
           path: kernel-cache
-          key: kernel-cache-${{ hashFiles('linux-big/PKGBUILD') }}
+          key: kernel-cache-${{ hashFiles('linux-big*/PKGBUILD') }}
           restore-keys: kernel-cache-
 
-      - name: Update to the newest release of the series
+      # Every series, oldest first; the last is the current one.
+      - name: Update each series to its newest release
         id: bump
         run: |
-          python3 .github/scripts/bump_kernel.py --cache kernel-cache --result "$RUNNER_TEMP/bump.json"
-          # Keep only this series' tarball and the newest patch in the cache.
+          mapfile -t kernels < <(find . -mindepth 1 -maxdepth 1 -type d -regex './linux-big[0-9]+' -printf '%f\n' | sort -V)
+          [[ ${#kernels[@]} -gt 0 ]] || { echo "::error::no linux-bigNN directory"; exit 1; }
+          for kernel in "${kernels[@]}"; do
+            python3 .github/scripts/bump_kernel.py --kernel "$kernel" --cache kernel-cache \
+              --result "$RUNNER_TEMP/bump-$kernel.json"
+          done
+          # In series order, the current one last.
+          for kernel in "${kernels[@]}"; do cat "$RUNNER_TEMP/bump-$kernel.json"; done |
+            jq -s --arg current "${kernels[-1]}" 'map(. + {current: (.kernel == $current)})' > "$RUNNER_TEMP/bump.json"
+          # Keep only the tarballs and the newest patch of each series in the cache.
           if [[ -d kernel-cache ]]; then
-            find kernel-cache -name 'patch-*.xz' ! -name "patch-$(jq -r '.to // ""' "$RUNNER_TEMP/bump.json").xz" -delete
+            keep=$(jq -r '[.[] | .to // empty | "patch-\(.).xz"] | join("\n")' "$RUNNER_TEMP/bump.json")
+            find kernel-cache -mindepth 1 -maxdepth 1 -type f -name 'patch-*.xz' |
+              while read -r file; do grep -qxF "${file##*/}" <<< "$keep" || rm -f "$file"; done
           fi
           {
-            echo "status=$(jq -r .status "$RUNNER_TEMP/bump.json")"
-            echo "from=$(jq -r .from "$RUNNER_TEMP/bump.json")"
-            echo "to=$(jq -r '.to // ""' "$RUNNER_TEMP/bump.json")"
-            echo "series=$(jq -r .series "$RUNNER_TEMP/bump.json")"
-            echo "eol=$(jq -r '.eol // false' "$RUNNER_TEMP/bump.json")"
+            echo "bumped=$(jq -r 'map(select(.status == "bumped")) | length > 0' "$RUNNER_TEMP/bump.json")"
+            echo "report=$(jq -r 'map(select(.status == "failed" or (.current and (.status == "eol" or .eol)))) | length > 0' "$RUNNER_TEMP/bump.json")"
           } >> "$GITHUB_OUTPUT"
 
       # Commits happen only from the default branch, the one the
       # build service checks out; a run on another branch only reports.
-      - name: Commit the update
-        if: steps.bump.outputs.status == 'bumped' && !inputs.dry_run && github.ref_name == github.event.repository.default_branch
-        env:
-          FROM: ${{ steps.bump.outputs.from }}
-          TO: ${{ steps.bump.outputs.to }}
+      - name: Commit the updates
+        if: steps.bump.outputs.bumped == 'true' && !inputs.dry_run && github.ref_name == github.event.repository.default_branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898898+github-actions[bot]@users.noreply.github.com"
-          git add -A linux-big
-          {
-            echo "⬆️ linux-big: $FROM → $TO"
-            echo
-            echo "Updated by the kernel watcher: prepare() applied every patch"
-            echo "and kept every required option on $TO."
-            jq -r 'if .eol then "\n\(.to) is the last release of \(.series): kernel.org marks the series end of life." else empty end' "$RUNNER_TEMP/bump.json"
-            jq -r 'if (.dropped | length) > 0 then "\nAlready in \(.to), dropped:\n" + (.dropped | map("  " + .) | join("\n")) else empty end' "$RUNNER_TEMP/bump.json"
-          } > "$RUNNER_TEMP/message"
-          git commit -F "$RUNNER_TEMP/message"
+          # One commit per series.
+          jq -c '.[] | select(.status == "bumped")' "$RUNNER_TEMP/bump.json" | while read -r result; do
+            kernel=$(jq -r .kernel <<< "$result")
+            git add -A "$kernel"
+            {
+              jq -r '"⬆️ \(.kernel): \(.from) → \(.to)"' <<< "$result"
+              echo
+              jq -r '"Updated by the kernel watcher: prepare() applied every patch\nand kept every required option on \(.to)."' <<< "$result"
+              jq -r 'if .eol then "\n\(.to) is the last release of \(.series): kernel.org marks the series end of life." else empty end' <<< "$result"
+              jq -r 'if (.dropped | length) > 0 then "\nAlready in \(.to), dropped:\n" + (.dropped | map("  " + .) | join("\n")) else empty end' <<< "$result"
+            } > "$RUNNER_TEMP/message"
+            git commit -F "$RUNNER_TEMP/message"
+          done
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
+      # Failures of any series; end of life only of the current one: an older
+      # series at its end of life is the reserve kept for the machines that
+      # still boot it, and the move from it was already made.
       - name: Report what needs a person
-        if: steps.bump.outputs.status == 'failed' || steps.bump.outputs.status == 'eol' || steps.bump.outputs.eol == 'true'
+        if: steps.bump.outputs.report == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const result = JSON.parse(require('fs').readFileSync(`${process.env.RUNNER_TEMP}/bump.json`, 'utf8'));
+            const results = JSON.parse(require('fs').readFileSync(`${process.env.RUNNER_TEMP}/bump.json`, 'utf8'));
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            let title, body;
-            if (result.status === 'eol' || result.eol) {
-              title = `linux-big: kernel ${result.series} reached its end of life`;
-              body = [
-                `kernel.org no longer maintains ${result.series}; linux-big is on ${result.status === 'bumped' ? result.to : result.from}, its last release.`,
-                '',
-                'Moving to the next series is not automatic: set `_basekernel` and `pkgver`,',
-                'refresh the config and the patches, and build it for testing.',
-                '',
-                `Run: ${run}`,
-              ].join('\n');
-            } else {
-              title = `linux-big: ${result.to} does not prepare`;
-              body = [
-                `The update from ${result.from} to ${result.to} failed in prepare(); nothing was committed or built.`,
-                '',
-                '```',
-                ...(result.reasons.length ? result.reasons : ['(no reason found in the output; see the run)']),
-                '```',
-                '',
-                ...(result.dropped.length ? [`Already in ${result.to}, would be dropped: ${result.dropped.join(', ')}`, ''] : []),
-                'Refresh the patch or the option, then set pkgver yourself or let the watcher retry.',
-                '',
-                `Run: ${run}`,
-              ].join('\n');
-            }
             // One issue per problem: later runs do not open it again.
             const open = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner, repo: context.repo.repo, state: 'open',
             });
-            if (open.some(issue => issue.title === title)) {
-              core.info(`already reported: ${title}`);
-              return;
+            for (const result of results) {
+              const endOfLife = result.current && (result.status === 'eol' || result.eol);
+              if (result.status !== 'failed' && !endOfLife) continue;
+              let title, body;
+              if (endOfLife) {
+                title = `${result.kernel}: kernel ${result.series} reached its end of life`;
+                body = [
+                  `kernel.org no longer maintains ${result.series}; ${result.kernel} is on ${result.status === 'bumped' ? result.to : result.from}, its last release.`,
+                  '',
+                  'Moving to the next series is not automatic: create the next linux-bigNN',
+                  'directory and its modules and refresh the config and the patches; it',
+                  'goes to testing by itself. Once approved, put it first in _series in',
+                  'linux-big/PKGBUILD.',
+                  '',
+                  `Run: ${run}`,
+                ].join('\n');
+              } else {
+                title = `${result.kernel}: ${result.to} does not prepare`;
+                body = [
+                  `The update from ${result.from} to ${result.to} failed in prepare(); nothing was committed or built.`,
+                  '',
+                  '```',
+                  ...(result.reasons.length ? result.reasons : ['(no reason found in the output; see the run)']),
+                  '```',
+                  '',
+                  ...(result.dropped.length ? [`Already in ${result.to}, would be dropped: ${result.dropped.join(', ')}`, ''] : []),
+                  'Refresh the patch or the option, then set pkgver yourself or let the watcher retry.',
+                  '',
+                  `Run: ${run}`,
+                ].join('\n');
+              }
+              if (open.some(issue => issue.title === title)) {
+                core.info(`already reported: ${title}`);
+                continue;
+              }
+              if (${{ inputs.dry_run || false }}) {
+                core.info(`dry run, would open: ${title}\n${body}`);
+                continue;
+              }
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+              core.info(`opened: ${title}`);
             }
-            if (${{ inputs.dry_run || false }}) {
-              core.info(`dry run, would open: ${title}\n${body}`);
-              return;
-            }
-            await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
-            core.info(`opened: ${title}`);

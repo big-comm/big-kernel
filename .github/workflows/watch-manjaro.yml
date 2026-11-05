@@ -1,9 +1,11 @@
 name: 🔎 Keep kernel modules in step
 
-# Sends linux-big to be built for testing when its PKGBUILD is ahead of what
-# testing has, and rebuilds the module packages (NVIDIA, broadcom-wl, zfs,
-# ...) whenever they fall behind: Manjaro published a new driver, or a new
-# linux-big was published. See .github/scripts/watch_manjaro.py.
+# For every kernel series (linux-big72, linux-big73, ...): sends the kernel
+# to be built for testing when its PKGBUILD is ahead of what testing has, and
+# rebuilds its module packages (NVIDIA, broadcom-wl, zfs, ...) whenever they
+# fall behind: Manjaro published a new driver, or a new kernel was published.
+# Then sends the linux-big metapackages to testing once everything they
+# depend on is there. See .github/scripts/watch_manjaro.py.
 
 on:
   schedule:
@@ -11,8 +13,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "linux-big/PKGBUILD"
-      - "linux-big-*/PKGBUILD"
+      - "linux-big*/PKGBUILD"
       - ".github/scripts/**"
       - ".github/workflows/watch-manjaro.yml"
   workflow_dispatch:
@@ -39,8 +40,9 @@ jobs:
       cancel-in-progress: false
     outputs:
       kernel: ${{ steps.dispatch.outputs.kernel }}
-    # contents: write to point the linux-big-stable branch at the commit
-    # stable's modules are built from, when stable is behind main.
+    # contents: write to point a linux-bigNN-stable branch at the commit
+    # stable's modules of that series are built from, when stable is behind
+    # main.
     permissions:
       contents: write
     steps:
@@ -78,8 +80,8 @@ jobs:
           path: watch-state.json
           key: watch-state-${{ github.run_id }}-${{ github.run_attempt }}
 
-  # When a kernel was just sent to build, wait for it and run the watcher
-  # again the moment it is published, so its modules follow within minutes
+  # When kernels were just sent to build, wait for them and run the watcher
+  # again the moment they are published, so their modules follow within minutes
   # instead of whenever GitHub next runs the schedule (hours, at times).
   # A queue of its own: the watcher keeps following drivers meanwhile.
   modules-after-kernel:
@@ -96,10 +98,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Wait for linux-big ${{ needs.watch.outputs.kernel }} in testing
+      # The output is "linux-big73=7.3.1-1 linux-big72=7.2.15-1": one word each.
+      - name: Wait for ${{ needs.watch.outputs.kernel }} in testing
         env:
           DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN || secrets.ORGANIZATION_TOKEN }}
-        run: python3 .github/scripts/watch_manjaro.py --wait-for-kernel "${{ needs.watch.outputs.kernel }}"
+          KERNELS: ${{ needs.watch.outputs.kernel }}
+        run: |
+          read -ra kernels <<< "$KERNELS"
+          python3 .github/scripts/watch_manjaro.py --wait-for-kernel "${kernels[@]}"
 
       - name: Run the watcher again, for the modules
         env:

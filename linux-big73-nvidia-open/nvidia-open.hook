@@ -1,0 +1,18 @@
+# Points depmod at the build of @KERNEL_PKG@-nvidia-open that matches the
+# installed nvidia-utils: after 60-depmod, before mkinitcpio and dkms.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/modules/*/extramodules/@KERNEL_PKG@-nvidia-open/*
+
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = nvidia-utils
+
+[Action]
+Description = Selecting the @KERNEL_PKG@-nvidia-open build for nvidia-utils...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/@KERNEL_PKG@-nvidia-select @KERNEL_PKG@-nvidia-open

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Keep the linux-big kernel modules in step with Manjaro and with linux-big.
 
-The module packages (linux-big-nvidia-open, linux-big-broadcom-wl, ...) each
-depend on one exact linux-big and on one exact driver version. They go stale
-in two ways: a new linux-big is published, or Manjaro publishes a new driver.
+Each kernel series is a package of its own (linux-big72, linux-big73), with
+its own module packages (linux-big73-nvidia-open, linux-big73-broadcom-wl,
+...), and every series in the repository is followed the same way. The
+module packages each depend on one exact kernel and on one exact driver
+version. They go stale in two ways: a new kernel is published, or Manjaro
+publishes a new driver.
 Either way the right version is computable, and this script compares it with
 what BigCommunity has published, branch by branch, and dispatches a build of
 every module that is behind. The driver version is the one users get: the
@@ -11,7 +14,7 @@ first of their repositories that has it -- BigLinux, Manjaro, BigCommunity --
 in their pacman.conf order, since that is how pacman chooses.
 
 Nothing is edited: the module PKGBUILDs read the driver version from pacman
-and the kernel version from ../linux-big/PKGBUILD when they build, so a build
+and the kernel version from ../linux-bigNN/PKGBUILD when they build, so a build
 dispatched from the current repository always produces the expected version.
 
 The NVIDIA modules also build for the driver of Manjaro testing, whose users
@@ -19,8 +22,13 @@ get a newer nvidia-utils than stable's: while the two differ, the package
 carries both builds and its version names both drivers, stable's first
 (610.57.04+615.71.09).
 
-A module is only dispatched on a branch once linux-big itself is published
-there, since the build needs linux-big-headers of that exact version.
+A module is only dispatched on a branch once its kernel is published there,
+since the build needs the headers of that exact version.
+
+linux-big, linux-big-headers and linux-big-<module> are metapackages that
+depend on the same package of every series (see linux-big/PKGBUILD). They are
+sent to testing once everything they depend on is there, never before: a
+metapackage published ahead of its dependencies would stop pacman -Syu.
 """
 
 import argparse
@@ -39,23 +47,48 @@ REPOSITORY_URL = "https://github.com/big-comm/big-kernel"
 USER_AGENT = f"big-kernel-watch/1 (+{REPOSITORY_URL})"
 WORKFLOW_REPOSITORY = "big-comm/build-package"
 
-# Module directory -> the Manjaro package its driver version follows, or None
-# when the version is fixed in the PKGBUILD itself.
+# Module -> the Manjaro package its driver version follows, or None when the
+# version is fixed in the PKGBUILD itself. Each series has a directory per
+# module: linux-big73-nvidia-open, linux-big72-nvidia-open, ...
 MODULES = {
-    "linux-big-nvidia-open": "nvidia-open-dkms",
-    "linux-big-nvidia": "nvidia-dkms",
-    "linux-big-nvidia-580xx-open": "nvidia-580xx-open-dkms",
-    "linux-big-nvidia-580xx": "nvidia-580xx-dkms",
-    "linux-big-nvidia-390xx": "nvidia-390xx-dkms",
-    "linux-big-broadcom-wl": "broadcom-wl-dkms",
-    "linux-big-virtualbox-host-modules": "virtualbox-host-dkms",
-    "linux-big-zfs": "zfs-dkms",
-    "linux-big-vhba-module": "vhba-module-dkms",
-    "linux-big-acpi_call": "acpi_call-dkms",
-    "linux-big-r8168": None,
-    "linux-big-rtl8723bu": None,
-    "linux-big-tp_smapi": None,
+    "nvidia-open": "nvidia-open-dkms",
+    "nvidia": "nvidia-dkms",
+    "nvidia-580xx-open": "nvidia-580xx-open-dkms",
+    "nvidia-580xx": "nvidia-580xx-dkms",
+    "nvidia-390xx": "nvidia-390xx-dkms",
+    "broadcom-wl": "broadcom-wl-dkms",
+    "virtualbox-host-modules": "virtualbox-host-dkms",
+    "zfs": "zfs-dkms",
+    "vhba-module": "vhba-module-dkms",
+    "acpi_call": "acpi_call-dkms",
+    "r8168": None,
+    "rtl8723bu": None,
+    "tp_smapi": None,
 }
+
+# A kernel series' directory and package: linux-big72, linux-big73.
+KERNEL_PACKAGE = re.compile(r"linux-big[0-9]+")
+# The metapackages' directory and the name of the first of them.
+META = "linux-big"
+
+
+def kernel_packages(root):
+    """The kernel series in the repository, oldest first."""
+    found = [
+        entry for entry in os.listdir(root)
+        if KERNEL_PACKAGE.fullmatch(entry) and os.path.isfile(os.path.join(root, entry, "PKGBUILD"))
+    ]
+    return sorted(found, key=lambda entry: int(entry[len(META):]))
+
+
+def module_package(kernel_pkg, module):
+    return f"{kernel_pkg}-{module}"
+
+
+def kernel_of(package):
+    """The kernel series a package belongs to: linux-big73-zfs -> linux-big73."""
+    match = re.match(r"linux-big[0-9]+", package)
+    return match.group(0) if match else None
 
 MANJARO_DB = "https://mirrors.manjaro.org/repo/{branch}/extra/x86_64/extra.db"
 # Each repository at <host>/<section>/<arch>, the $repo/$arch layout pacman.conf uses.
@@ -120,12 +153,17 @@ VIEWS = {
     "testing": [COMMUNITY_DB.format(branch="stable"), COMMUNITY_DB.format(branch="testing")],
 }
 
-# The branch stable modules are built from when stable's kernel is older than
-# the PKGBUILD on main. build-package checks out branches by name, and falls
-# back to main when the name does not exist, so it has to be a real branch.
-STABLE_REF = "linux-big-stable"
 
-KERNEL_PKGBUILD = "linux-big/PKGBUILD"
+def stable_ref(kernel_pkg):
+    """The branch stable modules of a series are built from when stable's
+    kernel is older than the PKGBUILD on main: linux-big73-stable.
+    build-package checks out branches by name, and falls back to main when the
+    name does not exist, so it has to be a real branch."""
+    return f"{kernel_pkg}-stable"
+
+
+def kernel_pkgbuild(kernel_pkg):
+    return f"{kernel_pkg}/PKGBUILD"
 
 
 class PkgbuildError(Exception):
@@ -189,12 +227,12 @@ def pkgbuild_value(path, key):
         return text_value(pkgbuild.read(), key, path)
 
 
-def kernel_version(text, where=KERNEL_PKGBUILD):
+def kernel_version(text, where="PKGBUILD"):
     return f"{text_value(text, 'pkgver', where)}-{text_value(text, 'pkgrel', where)}"
 
 
-def find_commit(root, kernel):
-    """The newest commit on this branch whose linux-big PKGBUILD is `kernel`.
+def find_commit(root, kernel, kernel_pkg):
+    """The newest commit on this branch whose kernel_pkg PKGBUILD is `kernel`.
 
     The last state of the repository for that kernel: what its modules were
     built from, with every module fix made before the next kernel.
@@ -208,10 +246,10 @@ def find_commit(root, kernel):
         return None
     for commit in commits:
         try:
-            if kernel_version(Tree(root, commit).read(KERNEL_PKGBUILD)) == kernel:
+            if kernel_version(Tree(root, commit).read(kernel_pkgbuild(kernel_pkg))) == kernel:
                 return commit
         except (subprocess.CalledProcessError, PkgbuildError):
-            continue  # a commit before linux-big, or one without a literal version
+            continue  # a commit before the series, or one without a literal version
     return None
 
 
@@ -279,6 +317,22 @@ def kernel_behind(branch, kernel, published):
     return branch in KERNEL_BRANCHES and (published is None or version_key(kernel) > version_key(published))
 
 
+# Packages Manjaro also ships as <package>-<series>-compat for a kernel series
+# newer than the upstream release supports (zfs-dkms-7.3-compat). The module
+# PKGBUILD builds from that one while it exists; so does the watcher.
+COMPAT_SOURCES = ("zfs-dkms",)
+
+
+def module_source(source, kernel, search, fetch_database):
+    """The package a module follows for the kernel `kernel` (7.3.1-1)."""
+    if source in COMPAT_SOURCES:
+        series = ".".join(kernel.split("-")[0].split(".")[:2])
+        compat = f"{source}-{series}-compat"
+        if first_in(search, compat, fetch_database) is not None:
+            return compat
+    return source
+
+
 def module_driver(text, source, search, fetch_database):
     """The driver part of a module's version, as its PKGBUILD computes it.
 
@@ -302,20 +356,22 @@ def module_driver(text, source, search, fetch_database):
     return driver
 
 
-def module_builds(branch, manjaro_branch, search, tree, branch_kernel, ours, fetch_database):
+def module_builds(branch, manjaro_branch, search, tree, kernel_pkg, branch_kernel, ours, fetch_database):
     """The modules of `branch` behind the drivers its users get."""
     rel = kernel_rel(*branch_kernel.split("-"))
     builds = []
-    for module, source in MODULES.items():
+    for name, source in MODULES.items():
+        module = module_package(kernel_pkg, name)
         where = f"{module}/PKGBUILD"
         try:
             text = tree.read(where)
         except (OSError, subprocess.CalledProcessError):
-            log(f"[{branch}] {module}: not in the repository for linux-big {branch_kernel}, skipped")
+            log(f"[{branch}] {module}: not in the repository for {kernel_pkg} {branch_kernel}, skipped")
             continue
         if source is None:
             driver = text_value(text, "pkgver", where)
         else:
+            source = module_source(source, branch_kernel, search, fetch_database)
             driver = module_driver(text, source, search, fetch_database)
             if driver is None:
                 log(f"[{branch}] {module}: {source} is missing from the {branch} repositories or Manjaro testing, skipped")
@@ -330,44 +386,115 @@ def module_builds(branch, manjaro_branch, search, tree, branch_kernel, ours, fet
     return builds
 
 
-def plan(root, fetch_database, refs=None, find=find_commit):
-    """Return the builds to dispatch as (branch, manjaro_branch, module, expected).
+def plan(root, fetch_database, kernel_pkg, refs=None, find=find_commit):
+    """Return the builds of one kernel series as (branch, manjaro_branch, package, expected).
 
     When stable's kernel is older than the PKGBUILD, its modules are planned
     from the commit that described that kernel, and refs["stable"] is set to
     it: the builds have to run from there.
     """
     head = Tree(root)
-    kernel = kernel_version(head.read(KERNEL_PKGBUILD))
-    log(f"linux-big in the repository: {kernel} (module pkgrel {kernel_rel(*kernel.split('-'))})")
+    kernel = kernel_version(head.read(kernel_pkgbuild(kernel_pkg)), kernel_pkgbuild(kernel_pkg))
+    log(f"{kernel_pkg} in the repository: {kernel} (module pkgrel {kernel_rel(*kernel.split('-'))})")
 
     builds = []
     for branch, (manjaro_branch, _published_to, search) in BRANCHES.items():
         ours = branch_view(branch, fetch_database)
-        published = ours.get("linux-big")
+        published = ours.get(kernel_pkg)
 
         tree, branch_kernel = head, kernel
         if branch not in KERNEL_BRANCHES and published is not None and published != kernel:
-            commit = find(root, published)
+            commit = find(root, published, kernel_pkg)
             if commit is None:
-                log(f"[{branch}] linux-big {published}: no commit describes it; its modules are not followed")
+                log(f"[{branch}] {kernel_pkg} {published}: no commit describes it; its modules are not followed")
                 continue
             tree, branch_kernel = Tree(root, commit), published
             if refs is not None:
                 refs[branch] = commit
-            log(f"[{branch}] linux-big {published} is behind the PKGBUILD; modules from {commit[:12]}")
+            log(f"[{branch}] {kernel_pkg} {published} is behind the PKGBUILD; modules from {commit[:12]}")
 
         if published == branch_kernel:
-            builds += module_builds(branch, manjaro_branch, search, tree, branch_kernel, ours, fetch_database)
+            builds += module_builds(branch, manjaro_branch, search, tree, kernel_pkg, branch_kernel, ours,
+                                    fetch_database)
         elif kernel_behind(branch, kernel, published):
             # The kernel watcher only commits the new version; building it is
             # decided here, from what is published, so a dispatch that failed
             # is retried on the next run instead of being forgotten.
-            log(f"[{branch}] linux-big: published {published}, PKGBUILD is {kernel}; building it")
-            builds.append((branch, manjaro_branch, "linux-big", kernel))
+            log(f"[{branch}] {kernel_pkg}: published {published}, PKGBUILD is {kernel}; building it")
+            builds.append((branch, manjaro_branch, kernel_pkg, kernel))
         else:
-            log(f"[{branch}] linux-big {kernel} is not published (found {published}); modules wait for it")
+            log(f"[{branch}] {kernel_pkg} {kernel} is not published (found {published}); modules wait for it")
     return builds
+
+
+def array_value(text, key, where):
+    """The words of a literal bash array: _series=(73 72) -> ["73", "72"]."""
+    match = re.search(rf"^{key}=\((.*?)\)", text, re.MULTILINE | re.DOTALL)
+    if not match:
+        raise PkgbuildError(f"{where}: no literal {key}=()")
+    words = []
+    for line in match.group(1).splitlines():
+        words += line.split("#", 1)[0].split()
+    return [word.strip("'\"") for word in words]
+
+
+def meta_version(text, where=f"{META}/PKGBUILD"):
+    """The metapackages' version as pacman's database writes it: 1:7.3-1."""
+    version = f"{text_value(text, 'pkgver', where)}-{text_value(text, 'pkgrel', where)}"
+    match = re.search(r"^epoch=(\S+)\s*$", text, re.MULTILINE)
+    return f"{match.group(1)}:{version}" if match else version
+
+
+def meta_key(version):
+    """A sortable key for a pacman version with an optional epoch, digits only."""
+    epoch, _, rest = version.rpartition(":")
+    pkgver, _, pkgrel = rest.partition("-")
+    return int(epoch or 0), tuple(int(part) for part in pkgver.split(".")), int(pkgrel or 0)
+
+
+def meta_packages(text, where=f"{META}/PKGBUILD"):
+    """What the metapackages depend on, for every series in _series."""
+    modules = array_value(text, "_modules", where)
+    needed = []
+    for series in array_value(text, "_series", where):
+        kernel_pkg = f"{META}{series}"
+        needed += [kernel_pkg, f"{kernel_pkg}-headers", *(module_package(kernel_pkg, m) for m in modules)]
+    return needed
+
+
+def plan_meta(root, fetch_database):
+    """The metapackages' build for testing, once all they depend on is there."""
+    where = f"{META}/PKGBUILD"
+    try:
+        text = Tree(root).read(where)
+    except OSError:
+        return []
+    expected = meta_version(text, where)
+    ours = branch_view("testing", fetch_database)
+    published = ours.get(META)
+    if published == expected:
+        log(f"[testing] {META} {expected}: up to date")
+        return []
+    if published is not None and meta_key(published) > meta_key(expected):
+        log(f"[testing] {META}: published {published} is newer than the PKGBUILD's {expected}; left alone")
+        return []
+    missing = [package for package in meta_packages(text, where) if package not in ours]
+    if missing:
+        log(f"[testing] {META} {expected} waits for {len(missing)} package(s): {', '.join(missing)}")
+        return []
+    log(f"[testing] {META}: published {published}, PKGBUILD is {expected}; building it")
+    return [("testing", "stable", META, expected)]
+
+
+def plan_all(root, fetch_database, refs=None, find=find_commit):
+    """Every series' builds, then the metapackages'. refs[kernel_pkg] is plan()'s refs."""
+    builds = []
+    for kernel_pkg in kernel_packages(root):
+        series_refs = {}
+        builds += plan(root, fetch_database, kernel_pkg, refs=series_refs, find=find)
+        if series_refs and refs is not None:
+            refs[kernel_pkg] = series_refs
+    return builds + plan_meta(root, fetch_database)
 
 
 def payload(branch, manjaro_branch, module, ref="main"):
@@ -479,7 +606,7 @@ def building(token):
 
 def wait_for_kernel(expected, published, in_flight, sleep=time.sleep, now=time.monotonic,
                     minutes=330, poll=300, grace=1200):
-    """Wait until linux-big `expected` is published in testing.
+    """Wait until a kernel `expected` is published in testing.
 
     Returns "published", "failed" when build-package is no longer building
     it and it is not published (after `grace` seconds, the time a dispatch
@@ -499,7 +626,7 @@ def wait_for_kernel(expected, published, in_flight, sleep=time.sleep, now=time.m
 
 def point_branch(root, name, commit):
     """Make branch `name` on GitHub point at `commit`, for build-package."""
-    # `commit` comes from git rev-list, `name` is STABLE_REF; checked anyway,
+    # `commit` comes from git rev-list, `name` from stable_ref(); checked anyway,
     # since both end up in a git command line.
     if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
         raise ValueError(f"refusing to point {name!r} at {commit!r}")
@@ -518,19 +645,28 @@ def main():
     parser.add_argument("--state", default="watch-state.json", help="builds already dispatched")
     parser.add_argument("--dry-run", action="store_true", help="report, dispatch nothing")
     parser.add_argument("--force", action="store_true", help="dispatch even what was dispatched before")
-    parser.add_argument("--wait-for-kernel", metavar="VERSION", help="wait until this linux-big is in testing")
+    parser.add_argument("--wait-for-kernel", metavar="PACKAGE=VERSION", nargs="+",
+                        help="wait until these kernels (linux-big73=7.3.1-1) are in testing")
     args = parser.parse_args()
 
     if args.wait_for_kernel:
         token = os.environ.get("DISPATCH_TOKEN", "")
         testing = BRANCHES["testing"][1]
-        result = wait_for_kernel(
-            args.wait_for_kernel,
-            published=lambda: read_database(fetch(testing)).get("linux-big"),
-            in_flight=lambda: "linux-big" in building(token),
-        )
-        log(f"linux-big {args.wait_for_kernel}: {result}")
-        return 0 if result == "published" else 1
+        failed = 0
+        # One after the other: they build at the same time, so the second wait
+        # is short by the time the first one ends.
+        for item in args.wait_for_kernel:
+            kernel_pkg, _, version = item.partition("=")
+            if not KERNEL_PACKAGE.fullmatch(kernel_pkg) or not version:
+                raise SystemExit(f"--wait-for-kernel: expected linux-bigNN=VERSION, got {item!r}")
+            result = wait_for_kernel(
+                version,
+                published=lambda: read_database(fetch(testing)).get(kernel_pkg),
+                in_flight=lambda: kernel_pkg in building(token),
+            )
+            log(f"{kernel_pkg} {version}: {result}")
+            failed += result != "published"
+        return 1 if failed else 0
 
     cache = {}
 
@@ -540,7 +676,7 @@ def main():
         return cache[url]
 
     refs = {}
-    builds = plan(args.root, fetch_database, refs=refs)
+    builds = plan_all(args.root, fetch_database, refs=refs)
 
     try:
         state = json.load(open(args.state, encoding="utf-8"))
@@ -565,17 +701,20 @@ def main():
     active = building(token) if todo and token and not args.dry_run else set()
     dispatched = 0
     pointed = set()
+    kernels = []
     for branch, manjaro_branch, module, expected in todo:
         if module in active:
             log(f"[{branch}] {module}: a build of it is already queued or running, not dispatched again")
             continue
         key = state_key(branch, manjaro_branch, module, expected)
         ref = "main"
-        if branch in refs:
-            ref = STABLE_REF
-            if branch not in pointed and not args.dry_run:
-                point_branch(args.root, STABLE_REF, refs[branch])
-            pointed.add(branch)
+        kernel_pkg = kernel_of(module)
+        series_refs = refs.get(kernel_pkg, {})
+        if branch in series_refs:
+            ref = stable_ref(kernel_pkg)
+            if ref not in pointed and not args.dry_run:
+                point_branch(args.root, ref, series_refs[branch])
+            pointed.add(ref)
         body = payload(branch, manjaro_branch, module, ref)
         if args.dry_run:
             log(f"[{branch}] would dispatch {module}: {json.dumps(body['client_payload'])}")
@@ -587,16 +726,19 @@ def main():
         log(f"[{branch}] dispatched {module} {expected}, attempt {attempts} of {MAX_ATTEMPTS} (HTTP {status})")
         state[key] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "attempts": attempts}
         dispatched += 1
-        if module == "linux-big":
-            # The workflow waits for it and then runs this watcher again, so
-            # the modules follow the kernel instead of the next schedule.
-            output = os.environ.get("GITHUB_OUTPUT")
-            if output:
-                with open(output, "a", encoding="utf-8") as out:
-                    out.write(f"kernel={expected}\n")
+        if module == kernel_pkg:
+            kernels.append(f"{module}={expected}")
         # Saved after each one: if a later dispatch fails, the ones already
         # sent are not sent again.
         save_state(args.state, state)
+
+    if kernels:
+        # The workflow waits for them and then runs this watcher again, so
+        # the modules follow the kernels instead of the next schedule.
+        output = os.environ.get("GITHUB_OUTPUT")
+        if output:
+            with open(output, "a", encoding="utf-8") as out:
+                out.write(f"kernel={' '.join(kernels)}\n")
 
     if not args.dry_run:
         save_state(args.state, state)
