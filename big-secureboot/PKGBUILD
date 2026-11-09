@@ -1,7 +1,7 @@
 # Maintainer: Tales A. Mendonça <talesam@gmail.com>
 #
-# big-secureboot: Secure Boot for BigCommunity, and the "anti-cheat" boot
-# entry Easy Anti-Cheat Linux v2 accepts.
+# big-secureboot: Secure Boot for BigCommunity, set up as Easy Anti-Cheat
+# Linux v2 requires.
 #
 # Optional, and nothing depends on it: it is only installed to be used, so
 # installing it (biglinux-driver-manager does) enables it, where it can; see
@@ -14,7 +14,12 @@
 #     with it shim trusts that GRUB and linux-big, signed with the same key
 #     (../secureboot/sign.sh);
 #   - big-secureboot, which installs all that in its own ESP directory and
-#     boot entry, and the "anti-cheat" GRUB entries (11_big-secureboot).
+#     boot entry;
+#   - what Easy Anti-Cheat checks besides Secure Boot: kexec off
+#     (90-big-secureboot.conf) and the Intel IOMMU on (90-big-secureboot.cfg,
+#     a GRUB drop-in). The kernel lockdown comes from linux-big itself, which
+#     locks down when booted with Secure Boot. The boot entries stay the
+#     usual ones.
 #
 # The GRUB image is built from the grub package of the build, so when Manjaro
 # publishes a new grub this package needs a new build to follow it.
@@ -35,9 +40,9 @@ source ../secureboot/sign.sh
 _shimver=16.1-7
 
 pkgname=big-secureboot
-pkgver=1.0.0
-pkgrel=2
-pkgdesc="Secure Boot for BigCommunity: shim, a signed GRUB, the BigCommunity key and the anti-cheat boot entry"
+pkgver=1.1.0
+pkgrel=1
+pkgdesc="Secure Boot for BigCommunity, set up as Easy Anti-Cheat requires: shim, a signed GRUB and the BigCommunity key"
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
 license=('GPL-3.0-or-later' 'BSD-2-Clause')
@@ -60,11 +65,13 @@ optdepends=(
 source=(
   "https://dl.fedoraproject.org/pub/fedora/linux/releases/45/Everything/x86_64/os/Packages/s/shim-x64-${_shimver}.x86_64.rpm"
   big-secureboot
-  11_big-secureboot
+  90-big-secureboot.cfg
+  90-big-secureboot.conf
   sbat.csv.in
 )
 noextract=("shim-x64-${_shimver}.x86_64.rpm")
 sha256sums=('04b7132d6316bff71427120b6aba85eb4490b2621ccb2f2559bd321ccb25f028'
+            'SKIP'
             'SKIP'
             'SKIP'
             'SKIP')
@@ -117,5 +124,6 @@ package() {
   install -Dm644 "$_sb_cert" "$pkgdir/usr/share/big-secureboot/big-secureboot.crt"
   openssl x509 -in "$_sb_cert" -outform DER -out "$pkgdir/usr/share/big-secureboot/big-secureboot.der"
   install -Dm755 big-secureboot "$pkgdir/usr/bin/big-secureboot"
-  install -Dm755 11_big-secureboot "$pkgdir/etc/grub.d/11_big-secureboot"
+  install -Dm644 90-big-secureboot.cfg "$pkgdir/etc/default/grub.d/90-big-secureboot.cfg"
+  install -Dm644 90-big-secureboot.conf "$pkgdir/usr/lib/sysctl.d/90-big-secureboot.conf"
 }

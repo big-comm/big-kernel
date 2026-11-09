@@ -1,0 +1,96 @@
+From: Tales A. Mendonça <talesam@gmail.com>
+Subject: [PATCH] efi: lock down the kernel in Secure Boot mode
+
+Lock the kernel down to integrity mode when the firmware booted it with
+UEFI Secure Boot enabled, behind CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT.
+
+Secure Boot verifies the kernel image, but a kernel that still loads
+unsigned modules or kexecs unsigned images lets anyone with root replace
+what was verified. Fedora, Ubuntu and Debian carry a patch to the same
+effect (originally by David Howells); this is a minimal version of it: the
+architecture calls the lockdown LSM once it has read the Secure Boot state,
+before the initrd and the ACPI table upgrade are processed, so lockdown
+covers them too. That needs the lockdown LSM initialised early
+(SECURITY_LOCKDOWN_LSM_EARLY). With Secure Boot disabled nothing changes.
+
+---
+diff -ruN a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
+--- a/arch/x86/kernel/setup.c	2026-11-09 14:16:07.511891400 -0300
++++ b/arch/x86/kernel/setup.c	2026-11-09 14:16:07.551638444 -0300
+@@ -11,6 +11,7 @@
+ #include <linux/crash_dump.h>
+ #include <linux/dma-map-ops.h>
+ #include <linux/efi.h>
++#include <linux/security.h>
+ #include <linux/hugetlb.h>
+ #include <linux/ima.h>
+ #include <linux/init_ohci1394_dma.h>
+@@ -1163,6 +1164,9 @@
+ 			break;
+ 		case efi_secureboot_mode_enabled:
+ 			pr_info("Secure boot enabled\n");
++#ifdef CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT
++			lock_kernel_down_secure_boot();
++#endif
+ 			break;
+ 		default:
+ 			pr_info("Secure boot could not be determined\n");
+diff -ruN a/include/linux/security.h b/include/linux/security.h
+--- a/include/linux/security.h	2026-11-09 14:16:07.519891490 -0300
++++ b/include/linux/security.h	2026-11-09 14:16:07.550753416 -0300
+@@ -170,6 +170,10 @@
+ 
+ extern const char *const lockdown_reasons[LOCKDOWN_CONFIDENTIALITY_MAX+1];
+ 
++#ifdef CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT
++void __init lock_kernel_down_secure_boot(void);
++#endif
++
+ /* These functions are in security/commoncap.c */
+ extern int cap_capable(const struct cred *cred, struct user_namespace *ns,
+ 		       int cap, unsigned int opts);
+diff -ruN a/security/lockdown/Kconfig b/security/lockdown/Kconfig
+--- a/security/lockdown/Kconfig	2026-11-09 14:16:07.517891468 -0300
++++ b/security/lockdown/Kconfig	2026-11-09 14:16:07.544219220 -0300
+@@ -16,6 +16,18 @@
+ 	  subsystem is fully initialised. If enabled, lockdown will
+ 	  unconditionally be called before any other LSMs.
+ 
++config LOCK_DOWN_IN_EFI_SECURE_BOOT
++	bool "Lock down the kernel in EFI Secure Boot mode"
++	depends on SECURITY_LOCKDOWN_LSM_EARLY && EFI && X86
++	help
++	  Lock the kernel down to integrity mode when the firmware reports
++	  that it booted the kernel with UEFI Secure Boot enabled, as if
++	  lockdown=integrity were on the command line. Secure Boot only
++	  means something if the running kernel cannot be modified: unsigned
++	  modules, /dev/mem, kexec of an unsigned image and similar ways to
++	  change it are then refused. With Secure Boot disabled nothing
++	  changes.
++
+ choice
+ 	prompt "Kernel default lockdown mode"
+ 	default LOCK_DOWN_KERNEL_FORCE_NONE
+diff -ruN a/security/lockdown/lockdown.c b/security/lockdown/lockdown.c
+--- a/security/lockdown/lockdown.c	2026-11-09 14:16:07.514891434 -0300
++++ b/security/lockdown/lockdown.c	2026-11-09 14:16:07.549109585 -0300
+@@ -52,6 +52,19 @@
+ 
+ early_param("lockdown", lockdown_param);
+ 
++#ifdef CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT
++/**
++ * lock_kernel_down_secure_boot - Lock down a kernel booted with Secure Boot
++ *
++ * Called by the architecture once it knows the firmware enabled UEFI Secure
++ * Boot. Like lockdown=integrity, it can only raise the lockdown level.
++ */
++void __init lock_kernel_down_secure_boot(void)
++{
++	lock_kernel_down("EFI Secure Boot mode", LOCKDOWN_INTEGRITY_MAX);
++}
++#endif
++
+ /**
+  * lockdown_is_locked_down - Find out if the kernel is locked down
+  * @what: Tag to use in notice generated if lockdown is in effect

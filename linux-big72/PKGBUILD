@@ -25,7 +25,7 @@ pkgver=7.2.15
 # make /usr/lib/modules/7.2.15-1-big/vmlinuz merely change owner. mkinitcpio
 # would then never remove /boot/vmlinuz-linux-big, left behind as a third
 # GRUB entry. A new release directory makes it a real removal.
-pkgrel=2
+pkgrel=3
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
 license=(GPL-2.0-only)
@@ -126,10 +126,13 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         # Follow-up to 0103 by Navon John Lukose: map those buffers WC on the CPU
         # (as i915 does), not UC. UC cost ~3 s at boot and ~2.5 s on every resume.
         0104-drm-xe-Map-Wa_22016122933-buffers-WC-on-the-CPU-side.patch
+        # BigCommunity: lock down in Secure Boot mode, as Fedora, Ubuntu and
+        # Debian do (../secureboot/sign.sh, big-secureboot)
+        0300-efi-lock-down-the-kernel-in-Secure-Boot-mode.patch
 )
 sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
             '2d89124e7adfe0e806bd4ae2c67da530ec4e7b45f466ccae77464dbcc878c7ac'
-            '0d7a55d95acde5c76da3bdc184030b9799b27be1422fbb4833349382d0864467'
+            '783ca6f5bf5318432c11bb47fe407d12469b22b052c45c4e5c6e8059a1b5def2'
             'e5e98d62b63704cecdf32dbe6a9bafea6e70b23fa8e01fe96ca220ac6036392e'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
             '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
@@ -173,7 +176,8 @@ sha256sums=('f9fef3d14c0df53819026f4be74459835c2a0b0dcbf5b5bbd9ea19f0829402b3'
             '85689db7f888c5fba374b1fcc803e3e26ffc927fdef4d87a022ae9f275635449'
             '91bdd01e6a8ec2de0ca198c0a1916fb588e801abfb28cbdd7e745e7a5e2c9492'
             'afb9cee8496ce87587865c157dfc8966b387a62b611cf49a3b12b967410f2d05'
-            '423c9a165c591b0e8da5851b32253089f3be025b0ab8dfb76cd598af2e07b0e5')
+            '423c9a165c591b0e8da5851b32253089f3be025b0ab8dfb76cd598af2e07b0e5'
+            '44be4bc1911684ea1126b2bcda90c4a443b4b66befe28be5ea8eab02c9adf04e')
 
 _srcdir="linux-${_basekernel}"
 
@@ -206,6 +210,8 @@ _required_options=(
   CONFIG_SCHED_CLASS_EXT=y
   CONFIG_NTSYNC=m
   CONFIG_DEBUG_INFO_BTF=y
+  CONFIG_SECURITY_LOCKDOWN_LSM_EARLY=y
+  CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT=y
 )
 
 prepare() {

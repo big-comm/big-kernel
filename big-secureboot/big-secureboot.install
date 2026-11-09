@@ -6,15 +6,20 @@ post_install() {
   /usr/bin/big-secureboot enable --auto || true
 }
 
-# New loaders reach the ESP, when enabled; the menu gets the entries of the
-# new 11_big-secureboot.
+# New loaders reach the ESP, when enabled; the menu follows the new
+# /etc/default/grub.d/90-big-secureboot.cfg.
 post_upgrade() {
   /usr/bin/big-secureboot refresh || true
   /usr/bin/update-grub >/dev/null 2>&1 || true
 }
 
-# Before the files go: the loaders and the boot entry leave the ESP, and the
-# "anti-cheat" entries the menu. Once the package is gone nothing of it runs.
+# Before the files go: the loaders and the boot entry leave the ESP.
 pre_remove() {
-  /usr/bin/big-secureboot disable --package-removal || true
+  /usr/bin/big-secureboot disable || true
+}
+
+# After: the menu loses the options of 90-big-secureboot.cfg, now gone.
+# The kexec sysctl stays set until the next boot.
+post_remove() {
+  /usr/bin/update-grub >/dev/null 2>&1 || true
 }
