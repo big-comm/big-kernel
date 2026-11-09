@@ -1,0 +1,121 @@
+# Maintainer: Tales A. Mendonça <talesam@gmail.com>
+#
+# big-secureboot: Secure Boot for BigCommunity, and the "modo jogos" boot
+# entry Easy Anti-Cheat Linux v2 accepts.
+#
+# Optional, and nothing depends on it: it is only installed to be used, so
+# installing it (biglinux-driver-manager does) enables it, where it can; see
+# big-secureboot.install. It brings:
+#   - shim, Fedora's build, signed by Microsoft (both the 2011 and the 2023
+#     UEFI CAs), so it boots wherever Secure Boot is on, old and new machines;
+#   - a GRUB signed with the BigCommunity key, with every module it needs
+#     built in: under Secure Boot GRUB loads no module from disk;
+#   - the BigCommunity certificate, which the user enrolls as a MOK, and
+#     with it shim trusts that GRUB and linux-big, signed with the same key
+#     (../secureboot/sign.sh);
+#   - big-secureboot, which installs all that in its own ESP directory and
+#     boot entry, and the "modo jogos" GRUB entries (11_big-secureboot).
+#
+# The GRUB image is built from the grub package of the build, so when Manjaro
+# publishes a new grub this package needs a new build to follow it.
+#
+# GRUB's SBAT generation: the shim of 2026 refuses GRUB below generation 7
+# (CVE-2026-97876, which affects 2.12 to 2.15). Manjaro's grub ships an
+# sbat.csv that still says 3, so the image gets its own, and grub>=2.16 is
+# required to build it.
+#
+# The CI signs with the key it gives this repository's builds only; without
+# it the build stops, since an unsigned GRUB is of no use here.
+#
+# Do not reference the pkgname or url variables anywhere in this file, not
+# even in a comment: a testing build in the CI expands them textually.
+
+source ../secureboot/sign.sh
+
+_shimver=16.1-7
+
+pkgname=big-secureboot
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Secure Boot for BigCommunity: shim, a signed GRUB, the BigCommunity key and the anti-cheat boot entry"
+arch=('x86_64')
+url="https://github.com/big-comm/big-kernel"
+license=('GPL-3.0-or-later' 'BSD-2-Clause')
+depends=(
+  'bash'
+  'efibootmgr'
+  'grub>=2:2.16'
+  'mokutil'
+  'openssl'
+)
+makedepends=(
+  'grub>=2:2.16'
+  'libarchive'
+  'sbsigntools'
+)
+install=big-secureboot.install
+optdepends=(
+  'tpm2-tools: to read the TPM event log of the measured boot'
+)
+source=(
+  "https://dl.fedoraproject.org/pub/fedora/linux/releases/45/Everything/x86_64/os/Packages/s/shim-x64-${_shimver}.x86_64.rpm"
+  big-secureboot
+  11_big-secureboot
+  sbat.csv.in
+)
+noextract=("shim-x64-${_shimver}.x86_64.rpm")
+sha256sums=('04b7132d6316bff71427120b6aba85eb4490b2621ccb2f2559bd321ccb25f028'
+            'SKIP'
+            'SKIP'
+            'SKIP')
+
+# Under Secure Boot GRUB loads nothing from disk, so all it may need is built
+# in: the file systems and partition tables of an install (btrfs, ext4, xfs,
+# LUKS 1 and 2 with argon2, LVM, RAID), the theme and its images and fonts,
+# the TPM measurements of the measured boot, and what the menu scripts use.
+# No "serial": CVE-2026-97876 went through it, and no machine needs it.
+_grub_modules=(
+  normal configfile linux boot chain echo test true regexp sleep reboot halt
+  loadenv cat ls minicmd probe read keystatus smbios gettext
+  part_gpt part_msdos fat ext2 btrfs xfs iso9660 loopback
+  search search_label search_fs_uuid search_fs_file
+  gzio xzio lzopio zstd
+  cryptodisk luks luks2 lvm mdraid1x mdraid09 argon2 pbkdf2 password_pbkdf2
+  gcry_rijndael gcry_sha256 gcry_sha512
+  font gfxterm gfxterm_background gfxmenu all_video efi_gop video_bochs video_cirrus
+  png jpeg tga
+  tpm bli efifwsetup
+)
+
+prepare() {
+  bsdtar -xf "shim-x64-${_shimver}.x86_64.rpm"
+}
+
+build() {
+  if ! _sb_enabled; then
+    error "big-secureboot needs the Secure Boot key (BIGCOMMUNITY_SB_KEY): its GRUB must be signed"
+    return 1
+  fi
+  # 2:2.16-4: upstream 2.16, and the package version for our own line.
+  local grubver upstream
+  grubver=$(LC_ALL=C pacman -Q grub | awk '{ print $2 }')
+  upstream=${grubver#*:}
+  upstream=${upstream%%-*}
+  sed -e "s|@UPSTREAM@|$upstream|" -e "s|@VERSION@|$grubver|" sbat.csv.in > sbat.csv
+
+  # The prefix is the ESP directory: grub.cfg there, written by
+  # big-secureboot, finds /boot/grub and loads the real menu.
+  grub-mkimage -O x86_64-efi -p /EFI/big-secureboot --sbat sbat.csv \
+    -o grubx64.efi "${_grub_modules[@]}"
+  _sb_sign_kernel grubx64.efi
+}
+
+package() {
+  local shim="usr/lib/efi/shim/${_shimver}/EFI/fedora"
+  install -Dm644 -t "$pkgdir/usr/share/big-secureboot" \
+    "$shim/shimx64.efi" "$shim/mmx64.efi" grubx64.efi sbat.csv
+  install -Dm644 "$_sb_cert" "$pkgdir/usr/share/big-secureboot/big-secureboot.crt"
+  openssl x509 -in "$_sb_cert" -outform DER -out "$pkgdir/usr/share/big-secureboot/big-secureboot.der"
+  install -Dm755 big-secureboot "$pkgdir/usr/bin/big-secureboot"
+  install -Dm755 11_big-secureboot "$pkgdir/etc/grub.d/11_big-secureboot"
+}

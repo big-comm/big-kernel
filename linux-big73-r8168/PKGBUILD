@@ -21,6 +21,8 @@ _kpkgver=$(sed -n 's/^pkgver=//p' "$_kernel_pkgbuild")
 _kpkgrel=$(sed -n 's/^pkgrel=//p' "$_kernel_pkgbuild")
 _kernel="${_kpkgver}-${_kpkgrel}"
 _kernver="${_kernel}-big"
+# Secure Boot signing (see ../secureboot/sign.sh).
+source ../secureboot/sign.sh
 
 # pkgrel encodes the kernel, so every new linux-big is an upgrade of this
 # package too: 7.2.7-2 -> 7020702, 7.3.0-1 -> 7030001.
@@ -90,5 +92,6 @@ package() {
   cd "r8168-$pkgver"
   install -Dm644 src/*.ko -t "$pkgdir/usr/lib/modules/$_kernver/extramodules/"
   find "$pkgdir" -name '*.ko' -exec strip --strip-debug {} +
+  _sb_sign_modules "$pkgdir" "$_kernver"
   find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +
 }

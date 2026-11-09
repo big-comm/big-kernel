@@ -1,0 +1,20 @@
+# big-secureboot is only installed to be used: installing it enables it.
+# "enable --auto" leaves alone what it cannot do from here (a chroot, a
+# container, a boot without UEFI) and says how to enable it later.
+
+post_install() {
+  /usr/bin/big-secureboot enable --auto || true
+}
+
+# New loaders reach the ESP, when enabled; the menu gets the entries of the
+# new 11_big-secureboot.
+post_upgrade() {
+  /usr/bin/big-secureboot refresh || true
+  /usr/bin/update-grub >/dev/null 2>&1 || true
+}
+
+# Before the files go: the loaders and the boot entry leave the ESP, and the
+# "modo jogos" entries the menu. Once the package is gone nothing of it runs.
+pre_remove() {
+  /usr/bin/big-secureboot disable --package-removal || true
+}
