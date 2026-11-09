@@ -21,6 +21,17 @@
 # on the next boot shim shows a blue screen (MokManager) where the user
 # confirms it with the password given here. That screen is the one manual
 # step, and it is deliberate: only someone at the machine can add a key.
+#
+# The key goes into shim's own list (MokList), not into the firmware's
+# keys: PK, KEK, db and dbx stay as the manufacturer left them, Microsoft's
+# included, which the firmware of GPUs and other devices (option ROMs) needs.
+#
+# Easy Anti-Cheat also wants the kernel locked down, kexec off and the IOMMU
+# on. linux-big locks itself down when booted with Secure Boot
+# (CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT); the package turns kexec off
+# (/usr/lib/sysctl.d/90-big-secureboot.conf) and adds intel_iommu=on to the
+# boot menu (/etc/default/grub.d/90-big-secureboot.cfg). The boot entries
+# stay the usual ones.
 
 set -euo pipefail
 
@@ -136,6 +147,7 @@ cmd_enable() {
   create_boot_entry
   update-grub >/dev/null 2>&1 || grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 ||
     say "Warning: the GRUB menu could not be updated; run update-grub."
+  sysctl -q -p /usr/lib/sysctl.d/90-big-secureboot.conf || true
   say "Boot loaders installed in $(find_esp)/$ESP_DIR, boot entry \"$LABEL\" created."
   if key_enrolled; then
     say "The BigCommunity key is already enrolled."
@@ -150,7 +162,8 @@ One step is left, at the next boot, done only once:
   3. Type the password: $password
   4. Choose "Reboot".
 Then turn on Secure Boot in the computer's firmware settings (UEFI), if it
-is off. For games with anti-cheat, start from the "anti-cheat" boot entry.
+is off. With Secure Boot on, the kernel locks itself down: only signed
+kernel modules load, as Easy Anti-Cheat requires.
 EOF
   fi
 }
@@ -163,15 +176,10 @@ cmd_refresh() {
 
 cmd_disable() {
   need_root disable
-  local remove_key=0 removal=0 esp n
+  local remove_key=0 esp n
   while (( $# )); do
     case $1 in
       --remove-key) remove_key=1 ;;
-      # From the package's remove script: also take the "anti-cheat" entries
-      # out of the menu. pacman runs no hook of a package it removes once
-      # the package is gone, so it has to happen now, with the script
-      # still there but no longer executable (grub-mkconfig skips it).
-      --package-removal) removal=1 ;;
       *) die "unknown option: $1" ;;
     esac
     shift
@@ -179,10 +187,6 @@ cmd_disable() {
   if [[ -d /sys/firmware/efi ]]; then
     for n in $(boot_entries); do efibootmgr -q -b "$n" -B; done
     esp=$(find_esp) && rm -rf -- "${esp:?}/$ESP_DIR"
-  fi
-  if (( removal )) && [[ -f /etc/grub.d/11_big-secureboot ]]; then
-    chmod -x /etc/grub.d/11_big-secureboot
-    update-grub >/dev/null 2>&1 || say "Warning: run update-grub to take the \"anti-cheat\" entries out of the menu."
   fi
   say "BigCommunity Secure Boot taken out of the boot."
   if mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'; then
@@ -204,7 +208,7 @@ cmd_status() {
   if key_enrolled; then check "BigCommunity key enrolled" true
   elif key_pending; then check "BigCommunity key enrolled (pending: confirm it on the blue screen when restarting)" false
   else check "BigCommunity key enrolled" false; fi
-  say "Easy Anti-Cheat requirements (met when started from the \"anti-cheat\" entry):"
+  say "Easy Anti-Cheat requirements:"
   check "Secure Boot on" "mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'"
   check "TPM 2.0" "[[ \$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null) == 2 ]]"
   check "kernel linux-big" "[[ \$(uname -r) == *-big ]]"

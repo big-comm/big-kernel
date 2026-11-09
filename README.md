@@ -437,20 +437,24 @@ The package brings:
 - Fedora's shim, signed by Microsoft with both the 2011 and the 2023 CA.
 - A GRUB signed with the BigCommunity key, with every module built in.
 - The certificate, which the user enrolls as a MOK.
-- An "anti-cheat" GRUB entry for each linux-big kernel.
+- What Easy Anti-Cheat Linux v2 checks besides Secure Boot: kexec off
+  (`/usr/lib/sysctl.d/90-big-secureboot.conf`) and the Intel IOMMU on
+  (`intel_iommu=on`, through `/etc/default/grub.d/90-big-secureboot.cfg`).
 
 It installs in its own ESP directory, `\EFI\big-secureboot`, with its own
 firmware boot entry, which the grub package's hooks never touch. Its GRUB
 reads the usual `/boot/grub/grub.cfg`, so the menu and its theme stay as they
-are.
+are. The key goes into shim's own list (MokList). The firmware keys (PK,
+KEK, db, dbx) are not touched, Microsoft's included, which the firmware of
+GPUs and other devices needs.
 
-The "anti-cheat" entry adds `lockdown=integrity`, `kexec_load_disabled` and
-the IOMMU to the command line, which is what Easy Anti-Cheat Linux v2
-requires, along with Secure Boot, TPM 2.0, measured boot and the BPF LSM. In
-that entry only signed modules load, so a module built locally by DKMS does
-not. The packaged ones (`linux-bigNN-nvidia*`, ...) are signed and do. Under
-Secure Boot, only linux-big boots, since it is the kernel signed with the
-BigCommunity key.
+Booted with Secure Boot, linux-big locks itself down to integrity mode
+(`0300-efi-lock-down-the-kernel-in-Secure-Boot-mode.patch`,
+`CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT`), as Fedora, Ubuntu and Debian do.
+Only signed modules load then: the packaged ones (`linux-bigNN-nvidia*`, …)
+are signed, while a module built locally by DKMS is not. Hibernation is not
+available either. With Secure Boot off nothing changes. Under Secure Boot,
+only linux-big boots, since it is the kernel signed with the BigCommunity key.
 
 ---
 

@@ -1,8 +1,8 @@
 """Every package of every series is signed for Secure Boot.
 
-A user who enrolled the BigCommunity key boots the "anti-cheat" entry under
-lockdown, where a module that is not signed does not load: one package that
-forgets to sign leaves them without that driver. The signing itself is
+Booted with Secure Boot, linux-big runs locked down, where a module that is
+not signed does not load: one package that forgets to sign leaves its users
+without that driver. The signing itself is
 secureboot/sign.sh; this checks every PKGBUILD calls it, and in the right
 place, so a new series or module cannot ship without it.
 
@@ -65,6 +65,26 @@ class TestModules(unittest.TestCase):
                     self.assertLess(sign, compress.start(), "modules must be signed before compression")
 
 
+class TestLockdown(unittest.TestCase):
+    """Booted with Secure Boot, linux-big locks itself down (integrity), as
+    Easy Anti-Cheat requires: only signed modules load."""
+
+    PATCH = "0300-efi-lock-down-the-kernel-in-Secure-Boot-mode.patch"
+
+    def test_every_series_carries_the_patch_and_the_options(self):
+        kernels = list(pkgbuilds(r"linux-big[0-9]+"))
+        self.assertTrue(kernels)
+        for name, text in kernels:
+            with self.subTest(name):
+                self.assertIn(self.PATCH, text)
+                self.assertTrue(os.path.isfile(os.path.join(ROOT, name, self.PATCH)))
+                with open(os.path.join(ROOT, name, "config"), encoding="utf-8") as f:
+                    config = f.read()
+                for option in ("CONFIG_SECURITY_LOCKDOWN_LSM_EARLY=y", "CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT=y"):
+                    self.assertIn(option + "\n", config)
+                    self.assertIn("  " + option + "\n", text, "prepare() must check it survives")
+
+
 class TestCertificate(unittest.TestCase):
     def test_the_certificate_names_the_signer_sign_sh_checks(self):
         with open(os.path.join(ROOT, "secureboot", "sign.sh"), encoding="utf-8") as f:
@@ -116,12 +136,16 @@ class TestPackage(unittest.TestCase):
         for needed in ("btrfs", "luks2", "argon2", "tpm", "gfxmenu", "png"):
             self.assertIn(needed, modules)
 
-    def test_the_games_entries_carry_the_anti_cheat_options(self):
-        with open(os.path.join(self.DIR, "11_big-secureboot"), encoding="utf-8") as f:
-            script = f.read()
-        for option in ("lockdown=integrity", "sysctl.kernel.kexec_load_disabled=1", "iommu.passthrough=0"):
-            self.assertIn(option, script)
-
+    def test_what_easy_anti_cheat_checks_besides_secure_boot(self):
+        with open(os.path.join(self.DIR, "90-big-secureboot.cfg"), encoding="utf-8") as f:
+            grub = f.read()
+        self.assertIn("intel_iommu=on", grub)
+        self.assertIn("iommu.passthrough=0", grub)
+        self.assertIn('${GRUB_CMDLINE_LINUX_DEFAULT}', grub, "the user's own options must stay")
+        with open(os.path.join(self.DIR, "90-big-secureboot.conf"), encoding="utf-8") as f:
+            self.assertRegex(f.read(), r"(?m)^kernel\.kexec_load_disabled = 1$")
+        for name in ("90-big-secureboot.cfg", "90-big-secureboot.conf"):
+            self.assertIn(name, self.text)
 
 if __name__ == "__main__":
     unittest.main()

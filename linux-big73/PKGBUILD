@@ -20,7 +20,7 @@
 _basekernel=7.3
 pkgbase=linux-big73
 pkgver=7.3.1
-pkgrel=1
+pkgrel=2
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
 license=(GPL-2.0-only)
@@ -120,10 +120,13 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         # Follow-up to 0103 by Navon John Lukose: map those buffers WC on the CPU
         # (as i915 does), not UC. UC cost ~3 s at boot and ~2.5 s on every resume.
         0104-drm-xe-Map-Wa_22016122933-buffers-WC-on-the-CPU-side.patch
+        # BigCommunity: lock down in Secure Boot mode, as Fedora, Ubuntu and
+        # Debian do (../secureboot/sign.sh, big-secureboot)
+        0300-efi-lock-down-the-kernel-in-Secure-Boot-mode.patch
 )
 sha256sums=('87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953'
             'faa3f6102b70a4c79db5eb7844719d2bdb9b3e5967ae914dda66eabf449eebc2'
-            '2ea656be02a0336b69ef671deea466d9a16aad27d684ec4001860e93a199fdbe'
+            '518f0b048228d12b56dac6c932e6e5207b15fef402924611bc7e523995d2eeae'
             '36b420493e2467b99d7fa0d08cf9dfcd53c635f7fde249a0dbdd5b5db8c8bf62'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
             '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
@@ -166,7 +169,8 @@ sha256sums=('87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953'
             '85689db7f888c5fba374b1fcc803e3e26ffc927fdef4d87a022ae9f275635449'
             '91bdd01e6a8ec2de0ca198c0a1916fb588e801abfb28cbdd7e745e7a5e2c9492'
             'afb9cee8496ce87587865c157dfc8966b387a62b611cf49a3b12b967410f2d05'
-            '423c9a165c591b0e8da5851b32253089f3be025b0ab8dfb76cd598af2e07b0e5')
+            '423c9a165c591b0e8da5851b32253089f3be025b0ab8dfb76cd598af2e07b0e5'
+            '44be4bc1911684ea1126b2bcda90c4a443b4b66befe28be5ea8eab02c9adf04e')
 
 _srcdir="linux-${_basekernel}"
 
@@ -199,6 +203,8 @@ _required_options=(
   CONFIG_SCHED_CLASS_EXT=y
   CONFIG_NTSYNC=m
   CONFIG_DEBUG_INFO_BTF=y
+  CONFIG_SECURITY_LOCKDOWN_LSM_EARLY=y
+  CONFIG_LOCK_DOWN_IN_EFI_SECURE_BOOT=y
 )
 
 prepare() {
