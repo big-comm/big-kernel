@@ -33,8 +33,8 @@ DEFAULT_PASSWORD=bigcommunity
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'big-secureboot: %s\n' "$*" >&2; exit 1; }
-need_root() { (( EUID == 0 )) || die "execute como root (sudo big-secureboot $1)"; }
-need_uefi() { [[ -d /sys/firmware/efi ]] || die "este sistema não deu boot em modo UEFI; Secure Boot exige UEFI"; }
+need_root() { (( EUID == 0 )) || die "run it as root (sudo big-secureboot $1)"; }
+need_uefi() { [[ -d /sys/firmware/efi ]] || die "this system did not boot in UEFI mode; Secure Boot needs UEFI"; }
 
 # The ESP mount point: what systemd finds, or the usual places.
 find_esp() {
@@ -46,7 +46,7 @@ find_esp() {
       esp=
     done
   fi
-  [[ -n $esp ]] || die "partição EFI (ESP) não encontrada"
+  [[ -n $esp ]] || die "EFI system partition (ESP) not found"
   printf '%s\n' "$esp"
 }
 
@@ -108,26 +108,26 @@ cmd_enable() {
   local password=$DEFAULT_PASSWORD auto=0
   while (( $# )); do
     case $1 in
-      --password) password=${2:?--password precisa de um valor}; shift 2 ;;
+      --password) password=${2:?--password needs a value}; shift 2 ;;
       # From the package install: where it cannot run (a chroot or a
       # container, building an ISO or installing a system, or a machine that
       # did not boot in UEFI mode) say so and leave pacman alone.
       --auto) auto=1; shift ;;
-      *) die "opção desconhecida: $1" ;;
+      *) die "unknown option: $1" ;;
     esac
   done
   if (( auto )); then
     local why=
     if [[ ! -d /sys/firmware/efi ]]; then
-      why="o sistema não deu boot em modo UEFI"
+      why="the system did not boot in UEFI mode"
     elif [[ $(stat -Lc %d:%i / 2>/dev/null) != "$(stat -Lc %d:%i /proc/1/root/ 2>/dev/null)" ]]; then
-      why="dentro de um chroot (instalação ou ISO)"
+      why="inside a chroot (an installation or an ISO build)"
     elif [[ -n ${container:-} || -e /run/systemd/container || -e /run/.containerenv || -e /.dockerenv ]]; then
-      why="dentro de um container"
+      why="inside a container"
     fi
     if [[ -n $why ]]; then
-      say "big-secureboot: instalado, mas não ativado: $why."
-      say "Ative depois de dar boot no sistema: sudo big-secureboot enable"
+      say "big-secureboot: installed, but not enabled: $why."
+      say "Enable it once the system is running: sudo big-secureboot enable"
       return 0
     fi
   fi
@@ -135,22 +135,22 @@ cmd_enable() {
   install_loaders
   create_boot_entry
   update-grub >/dev/null 2>&1 || grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 ||
-    say "Aviso: não foi possível atualizar o menu do GRUB; rode update-grub."
-  say "Carregadores instalados em $(find_esp)/$ESP_DIR e entrada de boot \"$LABEL\" criada."
+    say "Warning: the GRUB menu could not be updated; run update-grub."
+  say "Boot loaders installed in $(find_esp)/$ESP_DIR, boot entry \"$LABEL\" created."
   if key_enrolled; then
-    say "A chave da BigCommunity já está cadastrada."
+    say "The BigCommunity key is already enrolled."
   else
     printf '%s\n%s\n' "$password" "$password" | mokutil --import "$CERT" >/dev/null ||
-      die "mokutil --import falhou"
+      die "mokutil --import failed"
     cat <<EOF
 
-Falta um passo, no próximo boot:
-  1. Reinicie. Vai aparecer uma tela azul (MokManager).
-  2. Aperte uma tecla, escolha "Enroll MOK", depois "Continue" e "Yes".
-  3. Digite a senha: $password
-  4. Escolha "Reboot".
-Depois disso, ative o Secure Boot no setup do computador (UEFI), se ainda
-não estiver ativo. Para jogos com anti-cheat, use a entrada "modo jogos".
+One step is left, at the next boot, done only once:
+  1. Restart. A blue screen appears (MokManager).
+  2. Press a key, choose "Enroll MOK", then "Continue" and "Yes".
+  3. Type the password: $password
+  4. Choose "Reboot".
+Then turn on Secure Boot in the computer's firmware settings (UEFI), if it
+is off. For games with anti-cheat, start from the "anti-cheat" boot entry.
 EOF
   fi
 }
@@ -167,12 +167,12 @@ cmd_disable() {
   while (( $# )); do
     case $1 in
       --remove-key) remove_key=1 ;;
-      # From the package's remove hook: also take the "modo jogos" entries
+      # From the package's remove script: also take the "anti-cheat" entries
       # out of the menu. pacman runs no hook of a package it removes once
       # the package is gone, so it has to happen now, with the script
       # still there but no longer executable (grub-mkconfig skips it).
       --package-removal) removal=1 ;;
-      *) die "opção desconhecida: $1" ;;
+      *) die "unknown option: $1" ;;
     esac
     shift
   done
@@ -182,36 +182,36 @@ cmd_disable() {
   fi
   if (( removal )) && [[ -f /etc/grub.d/11_big-secureboot ]]; then
     chmod -x /etc/grub.d/11_big-secureboot
-    update-grub >/dev/null 2>&1 || say "Aviso: rode update-grub para tirar as entradas \"modo jogos\" do menu."
+    update-grub >/dev/null 2>&1 || say "Warning: run update-grub to take the \"anti-cheat\" entries out of the menu."
   fi
-  say "Secure Boot da BigCommunity removido do boot."
+  say "BigCommunity Secure Boot taken out of the boot."
   if mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'; then
-    say "Atenção: o Secure Boot está ativo. Desative-o no setup do computador antes de reiniciar,"
-    say "ou o sistema pode não dar boot."
+    say "Warning: Secure Boot is on. Turn it off in the firmware settings before restarting,"
+    say "or the system may not start."
   fi
   if (( remove_key )) && key_enrolled; then
     printf '%s\n%s\n' "$DEFAULT_PASSWORD" "$DEFAULT_PASSWORD" | mokutil --delete "$CERT" >/dev/null &&
-      say "Remoção da chave agendada: confirme na tela azul no próximo boot (senha: $DEFAULT_PASSWORD)."
+      say "Key removal scheduled: confirm it on the blue screen at the next boot (password: $DEFAULT_PASSWORD)."
   fi
 }
 
 # The checks of Easy Anti-Cheat Linux v2, as Bazzite's check-anticheat does.
 cmd_status() {
   local pass=0 fail=0
-  check() { if eval "$2"; then say "  [ok]    $1"; pass=$((pass + 1)); else say "  [falta] $1"; fail=$((fail + 1)); fi; }
-  say "Instalação:"
-  check "carregadores na ESP e entrada de boot" "enabled && [[ -n \$(boot_entries) ]]"
-  if key_enrolled; then check "chave BigCommunity cadastrada" true
-  elif key_pending; then check "chave BigCommunity cadastrada (pendente: confirme na tela azul ao reiniciar)" false
-  else check "chave BigCommunity cadastrada" false; fi
-  say "Requisitos do Easy Anti-Cheat (valem no boot pela entrada \"modo jogos\"):"
-  check "Secure Boot ativo" "mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'"
+  check() { if eval "$2"; then say "  [ok]    $1"; pass=$((pass + 1)); else say "  [no]    $1"; fail=$((fail + 1)); fi; }
+  say "Installation:"
+  check "boot loaders in the ESP and boot entry" "enabled && [[ -n \$(boot_entries) ]]"
+  if key_enrolled; then check "BigCommunity key enrolled" true
+  elif key_pending; then check "BigCommunity key enrolled (pending: confirm it on the blue screen when restarting)" false
+  else check "BigCommunity key enrolled" false; fi
+  say "Easy Anti-Cheat requirements (met when started from the \"anti-cheat\" entry):"
+  check "Secure Boot on" "mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'"
   check "TPM 2.0" "[[ \$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null) == 2 ]]"
   check "kernel linux-big" "[[ \$(uname -r) == *-big ]]"
-  check "nenhum módulo sem assinatura carregado" "(( (\$(cat /proc/sys/kernel/tainted) & 8192) == 0 ))"
-  check "IOMMU ativo" "compgen -G '/sys/class/iommu/*' >/dev/null"
+  check "no unsigned module loaded" "(( (\$(cat /proc/sys/kernel/tainted) & 8192) == 0 ))"
+  check "IOMMU on" "compgen -G '/sys/class/iommu/*' >/dev/null"
   check "lockdown integrity" "grep -qE '\[(integrity|confidentiality)\]' /sys/kernel/security/lockdown 2>/dev/null"
-  check "kexec desligado" "[[ \$(cat /proc/sys/kernel/kexec_load_disabled) == 1 ]]"
+  check "kexec off" "[[ \$(cat /proc/sys/kernel/kexec_load_disabled) == 1 ]]"
   check "BPF LSM" "[[ ,\$(cat /sys/kernel/security/lsm 2>/dev/null), == *,bpf,* ]]"
   (( fail == 0 ))
 }

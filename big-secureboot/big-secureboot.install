@@ -14,7 +14,7 @@ post_upgrade() {
 }
 
 # Before the files go: the loaders and the boot entry leave the ESP, and the
-# "modo jogos" entries the menu. Once the package is gone nothing of it runs.
+# "anti-cheat" entries the menu. Once the package is gone nothing of it runs.
 pre_remove() {
   /usr/bin/big-secureboot disable --package-removal || true
 }

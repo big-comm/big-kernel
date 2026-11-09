@@ -1,6 +1,6 @@
 """Every package of every series is signed for Secure Boot.
 
-A user who enrolled the BigCommunity key boots the "modo jogos" entry under
+A user who enrolled the BigCommunity key boots the "anti-cheat" entry under
 lockdown, where a module that is not signed does not load: one package that
 forgets to sign leaves them without that driver. The signing itself is
 secureboot/sign.sh; this checks every PKGBUILD calls it, and in the right

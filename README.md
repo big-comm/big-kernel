@@ -437,14 +437,14 @@ The package brings:
 - Fedora's shim, signed by Microsoft with both the 2011 and the 2023 CA.
 - A GRUB signed with the BigCommunity key, with every module built in.
 - The certificate, which the user enrolls as a MOK.
-- A "modo jogos" GRUB entry for each linux-big kernel.
+- An "anti-cheat" GRUB entry for each linux-big kernel.
 
 It installs in its own ESP directory, `\EFI\big-secureboot`, with its own
 firmware boot entry, which the grub package's hooks never touch. Its GRUB
 reads the usual `/boot/grub/grub.cfg`, so the menu and its theme stay as they
 are.
 
-The "modo jogos" entry adds `lockdown=integrity`, `kexec_load_disabled` and
+The "anti-cheat" entry adds `lockdown=integrity`, `kexec_load_disabled` and
 the IOMMU to the command line, which is what Easy Anti-Cheat Linux v2
 requires, along with Secure Boot, TPM 2.0, measured boot and the BPF LSM. In
 that entry only signed modules load, so a module built locally by DKMS does

@@ -1,5 +1,5 @@
 #!/bin/sh
-# big-secureboot: the "modo jogos" entries, one per linux-big kernel.
+# big-secureboot: the "anti-cheat" entries, one per linux-big kernel.
 #
 # The same entries 10_linux writes, with what Easy Anti-Cheat Linux v2 checks
 # added to the command line: lockdown (only signed modules load), no kexec
@@ -24,7 +24,7 @@ awk '
   # With the submenu disabled every kernel is a top-level entry block,
   # "menuentry ... {" to "}". Keep the main one of each linux-big kernel.
   /^menuentry / {
-    sub(/\047 --class/, " - modo jogos (anti-cheat)\047 --class")
+    sub(/\047 --class/, " - anti-cheat\047 --class")
     block = $0 "\n"; inside = 1; next
   }
   inside {

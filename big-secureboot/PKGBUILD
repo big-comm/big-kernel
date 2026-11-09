@@ -1,6 +1,6 @@
 # Maintainer: Tales A. Mendonça <talesam@gmail.com>
 #
-# big-secureboot: Secure Boot for BigCommunity, and the "modo jogos" boot
+# big-secureboot: Secure Boot for BigCommunity, and the "anti-cheat" boot
 # entry Easy Anti-Cheat Linux v2 accepts.
 #
 # Optional, and nothing depends on it: it is only installed to be used, so
@@ -14,7 +14,7 @@
 #     with it shim trusts that GRUB and linux-big, signed with the same key
 #     (../secureboot/sign.sh);
 #   - big-secureboot, which installs all that in its own ESP directory and
-#     boot entry, and the "modo jogos" GRUB entries (11_big-secureboot).
+#     boot entry, and the "anti-cheat" GRUB entries (11_big-secureboot).
 #
 # The GRUB image is built from the grub package of the build, so when Manjaro
 # publishes a new grub this package needs a new build to follow it.
@@ -36,7 +36,7 @@ _shimver=16.1-7
 
 pkgname=big-secureboot
 pkgver=1.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Secure Boot for BigCommunity: shim, a signed GRUB, the BigCommunity key and the anti-cheat boot entry"
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
