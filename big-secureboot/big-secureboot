@@ -111,6 +111,25 @@ create_boot_entry() {
 # the key ("already in the built-in trusted keyring").
 fingerprint() { openssl x509 -inform DER -in "$CERT" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f'; }
 has_key() { mokutil "$1" 2>/dev/null | sed 's/://g' | tr 'A-F' 'a-f' | grep -q "$(fingerprint)"; }
+# Before scheduling the key: what would make the blue screen pointless.
+#  - shim is signed with Microsoft's CAs for other systems (the "3rd Party"
+#    UEFI CA, 2011 and 2023). Some machines ("Secured-core" PCs) leave both
+#    out of db until "Allow Microsoft 3rd Party UEFI CA" is turned on in the
+#    firmware settings; shim would then never start.
+#  - The key and the request take room in the firmware's variable storage,
+#    which efivarfs reports through statfs. 8 KiB covers them with margin.
+#    Firmware crash dumps (efi-pstore, dump-*) are what usually fills it.
+DB_VAR=/sys/firmware/efi/efivars/db-d719b2cb-3d3a-4596-a3bc-dad00e67656f
+NVRAM_NEEDED=8192
+firmware_trusts_shim() {
+  [[ -r $DB_VAR ]] || return 0  # no db (setup mode): nothing to tell yet
+  grep -aq -e 'Microsoft Corporation UEFI CA 2011' -e 'Microsoft UEFI CA 2023' "$DB_VAR"
+}
+nvram_free() {  # bytes, or nothing when the kernel does not report it
+  local size avail total
+  read -r size avail total < <(stat -f -c '%S %a %b' /sys/firmware/efi/efivars 2>/dev/null) || return 0
+  (( total > 0 )) && echo $((size * avail))
+}
 key_enrolled() { has_key --list-enrolled; }
 key_pending() { has_key --list-new; }
 
@@ -143,6 +162,17 @@ cmd_enable() {
     fi
   fi
   need_uefi
+  firmware_trusts_shim ||
+    die "this firmware does not accept boot loaders signed by Microsoft for other systems.
+Turn on \"Allow Microsoft 3rd Party UEFI CA\" in the firmware settings, then run: sudo big-secureboot enable"
+  if ! key_enrolled; then
+    local free
+    free=$(nvram_free)
+    if [[ -n $free ]] && (( free < NVRAM_NEEDED )); then
+      die "the firmware has $((free / 1024)) KiB free for its variables, not enough for the BigCommunity key ($((NVRAM_NEEDED / 1024)) KiB).
+Old crash dumps kept by the firmware usually fill it: ls /sys/firmware/efi/efivars/dump-*"
+    fi
+  fi
   install_loaders
   create_boot_entry
   update-grub >/dev/null 2>&1 || grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 ||
@@ -204,6 +234,7 @@ cmd_status() {
   local pass=0 fail=0
   check() { if eval "$2"; then say "  [ok]    $1"; pass=$((pass + 1)); else say "  [no]    $1"; fail=$((fail + 1)); fi; }
   say "Installation:"
+  check "firmware accepts shim (Microsoft 3rd Party UEFI CA in db)" firmware_trusts_shim
   check "boot loaders in the ESP and boot entry" "enabled && [[ -n \$(boot_entries) ]]"
   if key_enrolled; then check "BigCommunity key enrolled" true
   elif key_pending; then check "BigCommunity key enrolled (pending: confirm it on the blue screen when restarting)" false
