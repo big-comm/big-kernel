@@ -74,5 +74,54 @@ class TestCertificate(unittest.TestCase):
         self.assertRegex(subject, rf"commonName\s+= {re.escape(signer)}\n")
 
 
+class TestPackage(unittest.TestCase):
+    """big-secureboot: what the package ships is there and consistent."""
+
+    DIR = os.path.join(ROOT, "big-secureboot")
+
+    def setUp(self):
+        with open(os.path.join(self.DIR, "PKGBUILD"), encoding="utf-8") as f:
+            self.text = f.read()
+
+    def array(self, name):
+        body = re.search(rf"^{name}=\((.*?)\)", self.text, re.M | re.S).group(1)
+        return re.findall(r"'([^']*)'|\"([^\"]*)\"|(\S+)", body)
+
+    def test_every_local_source_exists_and_has_a_checksum(self):
+        sources = [next(v for v in m if v) for m in self.array("source")]
+        sums = [next(v for v in m if v) for m in self.array("sha256sums")]
+        self.assertEqual(len(sources), len(sums))
+        for source in sources:
+            if "://" not in source:
+                self.assertTrue(os.path.isfile(os.path.join(self.DIR, source)), source)
+
+    def test_the_install_script_runs_commands_the_tool_has(self):
+        with open(os.path.join(self.DIR, "big-secureboot"), encoding="utf-8") as f:
+            tool = f.read()
+        commands = set(re.findall(r"^  (\w+)\)", tool, re.M))
+        options = set(re.findall(r"^      (--[\w-]+)\)", tool, re.M))
+        self.assertIn("install=big-secureboot.install", self.text)
+        with open(os.path.join(self.DIR, "big-secureboot.install"), encoding="utf-8") as f:
+            script = f.read()
+        for name in ("post_install", "post_upgrade", "pre_remove"):
+            self.assertIn(name + "()", script)
+        for command, option in re.findall(r"/usr/bin/big-secureboot (\w+) ?(--[\w-]+)?", script):
+            self.assertIn(command, commands)
+            if option:
+                self.assertIn(option, options)
+
+    def test_the_grub_has_no_serial_command(self):
+        modules = re.search(r"^_grub_modules=\((.*?)\)", self.text, re.M | re.S).group(1).split()
+        self.assertNotIn("serial", modules, "CVE-2026-97876 went through the serial command")
+        for needed in ("btrfs", "luks2", "argon2", "tpm", "gfxmenu", "png"):
+            self.assertIn(needed, modules)
+
+    def test_the_games_entries_carry_the_anti_cheat_options(self):
+        with open(os.path.join(self.DIR, "11_big-secureboot"), encoding="utf-8") as f:
+            script = f.read()
+        for option in ("lockdown=integrity", "sysctl.kernel.kexec_load_disabled=1", "iommu.passthrough=0"):
+            self.assertIn(option, script)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,6 +33,7 @@ gaming or not, on the hardware our users actually have.
 - [Kernel updates](#kernel-updates)
 - [NVIDIA and other kernel modules](#nvidia-and-other-kernel-modules)
 - [External modules (DKMS)](#external-modules-dkms)
+- [Secure Boot and anti-cheat](#secure-boot-and-anti-cheat)
 - [System tuning stays in BigLinux](#system-tuning-stays-in-biglinux)
 - [Building it yourself](#building-it-yourself)
 - [Roadmap](#roadmap)
@@ -408,6 +409,48 @@ toolchain. `linux-big-headers` depends on `clang`, `llvm` and `lld` and sets
 `LLVM=1` in its build Makefile, so DKMS modules are compiled with Clang
 automatically — the NVIDIA DKMS packages were tested this way too. No action is
 needed; an explicit `LLVM=` on the command line still overrides it.
+
+## Secure Boot and anti-cheat
+
+The kernel image and every module package are signed with the BigCommunity
+Secure Boot key (`secureboot/sign.sh`; the certificate is
+`secureboot/bigcommunity-secureboot-2026.crt`). The CI provides the key to
+this repository's builds only (big-comm/build-package,
+`scripts/secureboot-key.sh`). A build without the key, a local one for
+example, signs nothing. With Secure Boot off the signature is ignored and
+nothing changes. `.github/scripts/test_secureboot.py` fails if a series or a
+module package stops signing.
+
+Secure Boot itself is optional, through the `big-secureboot` package, which
+nothing depends on. Installing it enables it: biglinux-driver-manager
+installs it, or by hand:
+
+```bash
+sudo pacman -S big-secureboot # then reboot and confirm the key on the blue screen (password: bigcommunity)
+sudo big-secureboot enable    # if it was installed where it could not enable (a chroot, an ISO build)
+big-secureboot status         # what is in place, and the Easy Anti-Cheat checks
+sudo big-secureboot disable   # take it out of the boot (turn Secure Boot off first)
+```
+
+The package brings:
+
+- Fedora's shim, signed by Microsoft with both the 2011 and the 2023 CA.
+- A GRUB signed with the BigCommunity key, with every module built in.
+- The certificate, which the user enrolls as a MOK.
+- A "modo jogos" GRUB entry for each linux-big kernel.
+
+It installs in its own ESP directory, `\EFI\big-secureboot`, with its own
+firmware boot entry, which the grub package's hooks never touch. Its GRUB
+reads the usual `/boot/grub/grub.cfg`, so the menu and its theme stay as they
+are.
+
+The "modo jogos" entry adds `lockdown=integrity`, `kexec_load_disabled` and
+the IOMMU to the command line, which is what Easy Anti-Cheat Linux v2
+requires, along with Secure Boot, TPM 2.0, measured boot and the BPF LSM. In
+that entry only signed modules load, so a module built locally by DKMS does
+not. The packaged ones (`linux-bigNN-nvidia*`, ...) are signed and do. Under
+Secure Boot, only linux-big boots, since it is the kernel signed with the
+BigCommunity key.
 
 ---
 
