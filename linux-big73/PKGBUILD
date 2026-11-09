@@ -19,8 +19,8 @@
 
 _basekernel=7.3
 pkgbase=linux-big73
-pkgver=7.3.1
-pkgrel=2
+pkgver=7.3.3
+pkgrel=1
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
 license=(GPL-2.0-only)
@@ -125,7 +125,7 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         0300-efi-lock-down-the-kernel-in-Secure-Boot-mode.patch
 )
 sha256sums=('87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953'
-            'faa3f6102b70a4c79db5eb7844719d2bdb9b3e5967ae914dda66eabf449eebc2'
+            '4ebf04f150a2cfd11a435b3fbb1be1f2026dab1b42dc5921e4d86e8c4b23a72d'
             '518f0b048228d12b56dac6c932e6e5207b15fef402924611bc7e523995d2eeae'
             '36b420493e2467b99d7fa0d08cf9dfcd53c635f7fde249a0dbdd5b5db8c8bf62'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
@@ -134,7 +134,7 @@ sha256sums=('87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953'
             '512032c6b93fce24254da6cace7bf101c8f7c824761a0f99deed4b7724ac6f3e'
             '103688f3fceff664c919d94faab7a6948880710641110eaa71fe107ee06c37e9'
             'edc2c201fd4ca430da977c3efead0e1d9e115ddd353c7077c1ed2564c42de53c'
-            '252b74dc4948fd17e9a7c3826950b88c5b5076822ca9344909571259f53ed852'
+            '22839a08abd926a9dfb322325f94bc7cbcd9d6b4672068e5c51db54a07a830ba'
             'dfe559cd8bee858f98019d2ef12b9ed37fb469ee7b2dd9697294b310985bdd97'
             '942a83338dab5df515f4d5e4ce9af3c4f697b05f71da0854b05f6e97b03945a5'
             'e5fa674557be8d2b2fc313d6bfdb2bd7813aa6b6daf180ebad94088e91139322'
