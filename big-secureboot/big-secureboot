@@ -182,6 +182,13 @@ Old crash dumps kept by the firmware usually fill it: ls /sys/firmware/efi/efiva
   if key_enrolled; then
     say "The BigCommunity key is already enrolled."
   else
+    # A key already pending keeps the password of its request: mokutil skips
+    # it ("already in the enrollment request") and exits 0, and the password
+    # printed below would not be the one MokManager asks for (1.1.0 used
+    # another one). Start the request over, so it always holds this one.
+    if key_pending; then
+      mokutil --revoke-import >/dev/null || die "mokutil --revoke-import failed"
+    fi
     printf '%s\n%s\n' "$password" "$password" | mokutil --import "$CERT" >/dev/null ||
       die "mokutil --import failed"
     cat <<EOF
