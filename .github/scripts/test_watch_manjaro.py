@@ -586,8 +586,8 @@ class InFlight(unittest.TestCase):
         self.assertEqual(self.run_main(set(), builds), [K])
 
 
-class WaitForKernel(unittest.TestCase):
-    """The modules follow the kernel as soon as it is published."""
+class WaitForBuild(unittest.TestCase):
+    """A dispatched build is followed until it is published or fails."""
 
     def run_wait(self, published, in_flight, **limits):
         clock = {"t": 0}
@@ -601,8 +601,8 @@ class WaitForKernel(unittest.TestCase):
         def sleep(seconds):
             clock["t"] += seconds
 
-        return watch.wait_for_kernel("7.2.8-1", get_published, lambda: in_flight(clock["t"]),
-                                     sleep=sleep, now=lambda: clock["t"], **limits)
+        return watch.wait_for_build("7.2.8-1", get_published, lambda: in_flight(clock["t"]),
+                                    sleep=sleep, now=lambda: clock["t"], **limits)
 
     def test_published_after_a_while(self):
         result = self.run_wait(["7.2.7-2"] * 40 + ["7.2.8-1"], lambda t: True)
@@ -786,16 +786,107 @@ class TwoKernels(unittest.TestCase):
             else:
                 os.environ["GITHUB_OUTPUT"] = saved[5]
         with open(output.name, encoding="utf-8") as written:
-            self.assertEqual(written.read(), "kernel=linux-big72=7.2.15-1 linux-big73=7.3.1-1\n")
+            self.assertEqual(
+                written.read(),
+                "follow=testing:linux-big72=7.2.15-1 testing:linux-big73=7.3.1-1 "
+                "testing:linux-big73-zfs=2.4.5-7030101\n",
+            )
 
-    def test_waiting_takes_only_kernel_packages(self):
-        saved = sys.argv
-        sys.argv = ["watch_manjaro.py", "--wait-for-kernel", "linux-big73-zfs=1-1"]
+    def test_following_takes_only_what_the_watcher_writes(self):
+        for item in ("linux-big73-zfs=1-1", "extra:linux-big73=7.3.3-1", "testing:firefox=1-1",
+                     "testing:linux-big73=7.3.3-1;rm"):
+            with self.subTest(item=item), self.assertRaises(SystemExit):
+                watch.follow_builds([item], "", wait=lambda *a, **k: "published")
+
+
+class FollowBuilds(unittest.TestCase):
+    """2026-11-09: a module failed to download its kernel; the schedule did
+    not run for hours, so nothing dispatched it again until it was run by hand."""
+
+    def follow(self, results, items):
+        clock = {"t": 0}
+        calls = []
+
+        def wait(version, published, in_flight, minutes):
+            calls.append((version, minutes))
+            clock["t"] += 600
+            return results[len(calls) - 1]
+
+        def sleep(seconds):
+            clock["t"] += seconds
+
+        saved = watch.log
+        watch.log = lambda _message: None
         try:
-            with self.assertRaises(SystemExit):
-                watch.main()
+            failed = watch.follow_builds(items, "", wait=wait, sleep=sleep, now=lambda: clock["t"])
         finally:
-            sys.argv = saved
+            watch.log = saved
+        return failed, calls, clock["t"]
+
+    def test_all_published_returns_at_once(self):
+        failed, calls, elapsed = self.follow(
+            ["published", "published"],
+            ["testing:linux-big73=7.3.3-1", "testing:linux-big73-zfs=2.4.4-7030301"],
+        )
+        self.assertEqual(failed, 0)
+        self.assertEqual(elapsed, 1200)
+
+    def test_a_failed_build_waits_until_the_watcher_dispatches_it_again(self):
+        failed, _calls, elapsed = self.follow(["failed"], ["testing:linux-big73-nvidia-580xx-open=580.178.04-7030301"])
+        self.assertEqual(failed, 1)
+        self.assertGreater(elapsed, watch.RETRY_AFTER)
+
+    def test_a_kernel_gets_hours_and_a_module_two(self):
+        _failed, calls, _elapsed = self.follow(
+            ["published", "published"],
+            ["testing:linux-big73=7.3.3-1", "stable:linux-big72-zfs=2.4.4-7021503"],
+        )
+        self.assertEqual(calls, [("7.3.3-1", 330), ("2.4.4-7021503", 120)])
+
+    def test_the_metapackage_is_followed_too(self):
+        failed, calls, _elapsed = self.follow(["published"], ["testing:linux-big=1:7.3-1"])
+        self.assertEqual((failed, calls), (0, [("1:7.3-1", 120)]))
+
+    def test_each_build_is_looked_up_in_its_own_branch(self):
+        fetched = []
+        saved = (watch.fetch, watch.read_database, watch.building, watch.log)
+        watch.fetch = lambda url: fetched.append(url) or url
+        watch.read_database = lambda url: {"linux-big72-zfs": "2", "linux-big73": "1"}
+        watch.building = lambda token: set()
+        watch.log = lambda _message: None
+        try:
+            failed = watch.follow_builds(["stable:linux-big72-zfs=2", "testing:linux-big73=1"], "",
+                                         sleep=lambda s: None)
+        finally:
+            watch.fetch, watch.read_database, watch.building, watch.log = saved
+        self.assertEqual(failed, 0)
+        self.assertEqual(fetched, [watch.BRANCHES["stable"][1], watch.BRANCHES["testing"][1]])
+
+    def test_a_run_that_dispatches_nothing_is_not_followed(self):
+        # Otherwise every run would start another one, forever.
+        import tempfile
+        state_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        state_file.write("{}")
+        state_file.close()
+        self.addCleanup(os.unlink, state_file.name)
+        output = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
+        output.close()
+        self.addCleanup(os.unlink, output.name)
+        saved = (watch.plan_all, watch.log, sys.argv, os.environ.get("GITHUB_OUTPUT"))
+        watch.plan_all = lambda root, fetch, **_kw: []
+        watch.log = lambda _message: None
+        sys.argv = ["watch_manjaro.py", "--state", state_file.name]
+        os.environ["GITHUB_OUTPUT"] = output.name
+        try:
+            watch.main()
+        finally:
+            watch.plan_all, watch.log, sys.argv = saved[:3]
+            if saved[3] is None:
+                del os.environ["GITHUB_OUTPUT"]
+            else:
+                os.environ["GITHUB_OUTPUT"] = saved[3]
+        with open(output.name, encoding="utf-8") as written:
+            self.assertEqual(written.read(), "")
 
 
 if __name__ == "__main__":
