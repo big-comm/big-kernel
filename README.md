@@ -431,7 +431,7 @@ nothing depends on. Installing it enables it: biglinux-driver-manager
 installs it, or by hand:
 
 ```bash
-sudo pacman -S big-secureboot # then reboot and confirm the key on the blue screen (password: bigcommunity)
+sudo pacman -S big-secureboot # then reboot and confirm the key on the blue screen (password: big)
 sudo big-secureboot enable    # if it was installed where it could not enable (a chroot, an ISO build)
 big-secureboot status         # what is in place, and the Easy Anti-Cheat checks
 sudo big-secureboot disable   # take it out of the boot (turn Secure Boot off first)
