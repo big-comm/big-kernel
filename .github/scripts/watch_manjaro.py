@@ -604,9 +604,9 @@ def building(token):
     return names
 
 
-def wait_for_kernel(expected, published, in_flight, sleep=time.sleep, now=time.monotonic,
-                    minutes=330, poll=300, grace=1200):
-    """Wait until a kernel `expected` is published in testing.
+def wait_for_build(expected, published, in_flight, sleep=time.sleep, now=time.monotonic,
+                   minutes=330, poll=300, grace=1200):
+    """Wait until version `expected` of a package is published.
 
     Returns "published", "failed" when build-package is no longer building
     it and it is not published (after `grace` seconds, the time a dispatch
@@ -622,6 +622,50 @@ def wait_for_kernel(expected, published, in_flight, sleep=time.sleep, now=time.m
         if waited >= minutes * 60:
             return "timeout"
         sleep(poll)
+
+
+# What a run dispatched, handed to the job that follows it: BRANCH:PACKAGE=VERSION,
+# a kernel, one of its modules or the metapackage (testing:linux-big=1:7.3-1).
+FOLLOWED = re.compile(r"(stable|testing):(linux-big(?:[0-9]+(?:-[A-Za-z0-9._+-]+)?)?)=([A-Za-z0-9._+:~-]+)")
+
+
+def follow_builds(items, token, wait=wait_for_build, sleep=time.sleep, now=time.monotonic):
+    """Wait for the builds a watcher run dispatched; how many did not publish.
+
+    The workflow runs the watcher again right after, so a build that failed
+    (most often the network) is dispatched again within the hour instead of
+    whenever GitHub next runs the schedule, which has been hours apart.
+    The same run dispatches the modules of a kernel just published, and the
+    metapackage once its modules are there. When a build failed this returns
+    only once RETRY_AFTER has passed since the dispatch: before that the
+    watcher counts it as dispatched recently and waits for it.
+    """
+    start = now()
+    builds = []
+    for item in items:
+        match = FOLLOWED.fullmatch(item)
+        if not match:
+            raise SystemExit(f"--follow: expected BRANCH:PACKAGE=VERSION, got {item!r}")
+        builds.append(match.groups())
+    failed = 0
+    # One after the other: they build at the same time, so the later waits
+    # are short by the time the first one ends. A kernel takes hours.
+    for branch, package, version in builds:
+        database = BRANCHES[branch][1]
+        result = wait(
+            version,
+            published=lambda database=database, package=package: read_database(fetch(database)).get(package),
+            in_flight=lambda package=package: package in building(token),
+            minutes=330 if package == kernel_of(package) else 120,
+        )
+        log(f"[{branch}] {package} {version}: {result}")
+        failed += result != "published"
+    if failed:
+        left = RETRY_AFTER + 60 - (now() - start)
+        if left > 0:
+            log(f"{failed} build(s) did not publish; waiting {int(left)}s so the watcher dispatches them again")
+            sleep(left)
+    return failed
 
 
 def point_branch(root, name, commit):
@@ -645,28 +689,17 @@ def main():
     parser.add_argument("--state", default="watch-state.json", help="builds already dispatched")
     parser.add_argument("--dry-run", action="store_true", help="report, dispatch nothing")
     parser.add_argument("--force", action="store_true", help="dispatch even what was dispatched before")
-    parser.add_argument("--wait-for-kernel", metavar="PACKAGE=VERSION", nargs="+",
-                        help="wait until these kernels (linux-big73=7.3.1-1) are in testing")
+    parser.add_argument("--follow", metavar="BRANCH:PACKAGE=VERSION", nargs="+",
+                        help="wait for these builds (testing:linux-big73-zfs=2.4.4-7030301) to publish or fail")
     args = parser.parse_args()
 
-    if args.wait_for_kernel:
-        token = os.environ.get("DISPATCH_TOKEN", "")
-        testing = BRANCHES["testing"][1]
-        failed = 0
-        # One after the other: they build at the same time, so the second wait
-        # is short by the time the first one ends.
-        for item in args.wait_for_kernel:
-            kernel_pkg, _, version = item.partition("=")
-            if not KERNEL_PACKAGE.fullmatch(kernel_pkg) or not version:
-                raise SystemExit(f"--wait-for-kernel: expected linux-bigNN=VERSION, got {item!r}")
-            result = wait_for_kernel(
-                version,
-                published=lambda: read_database(fetch(testing)).get(kernel_pkg),
-                in_flight=lambda: kernel_pkg in building(token),
-            )
-            log(f"{kernel_pkg} {version}: {result}")
-            failed += result != "published"
-        return 1 if failed else 0
+    if args.follow:
+        failed = follow_builds(args.follow, os.environ.get("DISPATCH_TOKEN", ""))
+        if failed:
+            # A warning, not a failure: the watcher dispatches them again, and
+            # fails its own run once a build is given up after three attempts.
+            print(f"::warning::{failed} build(s) did not publish, dispatching them again", flush=True)
+        return 0
 
     cache = {}
 
@@ -701,7 +734,7 @@ def main():
     active = building(token) if todo and token and not args.dry_run else set()
     dispatched = 0
     pointed = set()
-    kernels = []
+    followed = []
     for branch, manjaro_branch, module, expected in todo:
         if module in active:
             log(f"[{branch}] {module}: a build of it is already queued or running, not dispatched again")
@@ -726,19 +759,19 @@ def main():
         log(f"[{branch}] dispatched {module} {expected}, attempt {attempts} of {MAX_ATTEMPTS} (HTTP {status})")
         state[key] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "attempts": attempts}
         dispatched += 1
-        if module == kernel_pkg:
-            kernels.append(f"{module}={expected}")
+        followed.append(f"{branch}:{module}={expected}")
         # Saved after each one: if a later dispatch fails, the ones already
         # sent are not sent again.
         save_state(args.state, state)
 
-    if kernels:
-        # The workflow waits for them and then runs this watcher again, so
-        # the modules follow the kernels instead of the next schedule.
+    if followed:
+        # The workflow waits for them and then runs this watcher again: the
+        # modules follow a kernel, and a failed build is retried, without
+        # waiting for the schedule.
         output = os.environ.get("GITHUB_OUTPUT")
         if output:
             with open(output, "a", encoding="utf-8") as out:
-                out.write(f"kernel={' '.join(kernels)}\n")
+                out.write(f"follow={' '.join(followed)}\n")
 
     if not args.dry_run:
         save_state(args.state, state)

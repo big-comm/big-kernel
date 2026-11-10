@@ -39,7 +39,7 @@ jobs:
       group: watch-manjaro
       cancel-in-progress: false
     outputs:
-      kernel: ${{ steps.dispatch.outputs.kernel }}
+      follow: ${{ steps.dispatch.outputs.follow }}
     # contents: write to point a linux-bigNN-stable branch at the commit
     # stable's modules of that series are built from, when stable is behind
     # main.
@@ -80,34 +80,35 @@ jobs:
           path: watch-state.json
           key: watch-state-${{ github.run_id }}-${{ github.run_attempt }}
 
-  # When kernels were just sent to build, wait for them and run the watcher
-  # again the moment they are published, so their modules follow within minutes
-  # instead of whenever GitHub next runs the schedule (hours, at times).
-  # A queue of its own: the watcher keeps following drivers meanwhile.
-  modules-after-kernel:
+  # Whatever was just sent to build is followed until it is published or
+  # fails, and then the watcher runs again: the modules follow a kernel within
+  # minutes, a build that failed (most often the network) is dispatched again
+  # half an hour later, and the metapackage follows its modules. GitHub runs
+  # the schedule hours apart at times (2026-11-09: none for more than five
+  # hours), so it cannot be what retries a build.
+  # No concurrency group: a group keeps a single pending run and cancels the
+  # one before it, which would drop a follow-up.
+  follow-up:
     needs: watch
-    if: needs.watch.outputs.kernel != ''
+    if: needs.watch.outputs.follow != ''
     runs-on: ubuntu-latest
     timeout-minutes: 350
-    concurrency:
-      group: watch-kernel-build
-      cancel-in-progress: false
     permissions:
       contents: read
       actions: write
     steps:
       - uses: actions/checkout@v4
 
-      # The output is "linux-big73=7.3.1-1 linux-big72=7.2.15-1": one word each.
-      - name: Wait for ${{ needs.watch.outputs.kernel }} in testing
+      # One word each: "testing:linux-big73=7.3.3-1 testing:linux-big73-zfs=2.4.4-7030301".
+      - name: Wait for what was dispatched
         env:
           DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN || secrets.ORGANIZATION_TOKEN }}
-          KERNELS: ${{ needs.watch.outputs.kernel }}
+          FOLLOW: ${{ needs.watch.outputs.follow }}
         run: |
-          read -ra kernels <<< "$KERNELS"
-          python3 .github/scripts/watch_manjaro.py --wait-for-kernel "${kernels[@]}"
+          read -ra builds <<< "$FOLLOW"
+          python3 .github/scripts/watch_manjaro.py --follow "${builds[@]}"
 
-      - name: Run the watcher again, for the modules
+      - name: Run the watcher again
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

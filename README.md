@@ -274,7 +274,12 @@ every `linux-bigNN` directory, and when a new release of a series is out
 4. commits the update. The module watcher, which compares the PKGBUILD with
    what is published every 30 minutes, then sends the kernel to be built for
    **testing**, and the modules once it is published. Building is decided from
-   what is published, so a dispatch that fails is simply retried.
+   what is published, so a dispatch that fails is simply retried. Every build
+   the watcher sends is followed until it is published or fails, and then the
+   watcher runs again, without waiting for GitHub's schedule (which can be
+   hours late): the modules follow the kernel, a failed build is sent again
+   half an hour later (three attempts in all), and the `linux-big`
+   metapackage follows its modules.
 
 When a patch no longer fits or an option is lost, nothing is committed or
 built: the watcher opens an issue naming the patch or the option, once. It
