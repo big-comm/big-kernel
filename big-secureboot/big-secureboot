@@ -1,7 +1,7 @@
 #!/bin/bash
 # big-secureboot: Secure Boot for BigCommunity, with the BigCommunity key.
 #
-#   big-secureboot enable [--password SENHA]   install it and schedule the key
+#   big-secureboot enable [--password PW]      install it and schedule the key
 #                                              (the package install runs it)
 #   big-secureboot status                      what is in place, and the
 #                                              Easy Anti-Cheat checks
@@ -40,7 +40,7 @@ ESP_DIR=EFI/big-secureboot
 LABEL="BigCommunity Secure Boot"
 LOADER='\EFI\big-secureboot\shimx64.efi'
 CERT=$SHARE/big-secureboot.der
-DEFAULT_PASSWORD=bigcommunity
+DEFAULT_PASSWORD=big
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'big-secureboot: %s\n' "$*" >&2; exit 1; }
