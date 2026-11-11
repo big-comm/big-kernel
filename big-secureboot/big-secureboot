@@ -110,7 +110,15 @@ create_boot_entry() {
 # By fingerprint: mokutil's own wording changes once the kernel has loaded
 # the key ("already in the built-in trusted keyring").
 fingerprint() { openssl x509 -inform DER -in "$CERT" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f'; }
-has_key() { mokutil "$1" 2>/dev/null | sed 's/://g' | tr 'A-F' 'a-f' | grep -q "$(fingerprint)"; }
+# Read the whole list before searching it: "mokutil | grep -q" under pipefail
+# fails once grep stops reading and mokutil, still printing the certificates
+# that follow, dies of SIGPIPE (141), so an enrolled key looked missing.
+has_key() {
+  local list
+  list=$(mokutil "$1" 2>/dev/null) || true
+  list=${list//:/}
+  [[ ${list,,} == *"$(fingerprint)"* ]]
+}
 # Before scheduling the key: what would make the blue screen pointless.
 #  - shim is signed with Microsoft's CAs for other systems (the "3rd Party"
 #    UEFI CA, 2011 and 2023). Some machines ("Secured-core" PCs) leave both
@@ -242,7 +250,12 @@ cmd_status() {
   check() { if eval "$2"; then say "  [ok]    $1"; pass=$((pass + 1)); else say "  [no]    $1"; fail=$((fail + 1)); fi; }
   say "Installation:"
   check "firmware accepts shim (Microsoft 3rd Party UEFI CA in db)" firmware_trusts_shim
-  check "boot loaders in the ESP and boot entry" "enabled && [[ -n \$(boot_entries) ]]"
+  # The ESP is readable by root alone: as a user, say so instead of "no".
+  if (( EUID == 0 )); then
+    check "boot loaders in the ESP and boot entry" "enabled && [[ -n \$(boot_entries) ]]"
+  else
+    say "  [?]     boot loaders in the ESP and boot entry (run it with sudo to check)"
+  fi
   if key_enrolled; then check "BigCommunity key enrolled" true
   elif key_pending; then check "BigCommunity key enrolled (pending: confirm it on the blue screen when restarting)" false
   else check "BigCommunity key enrolled" false; fi
