@@ -1,6 +1,6 @@
 # Maintainer: Tales A. Mendonça <talesam@gmail.com>
 #
-# linux-big: the names that follow BigCommunity's current kernel series.
+# linux-big: the names that follow BigLinux's current kernel series.
 #
 # Each kernel series is a package of its own, as in Manjaro (linux72,
 # linux73): linux-big72, linux-big73, their headers and their modules
@@ -68,17 +68,17 @@ _each_series() {
 }
 
 _package() {
-  pkgdesc="The BigCommunity kernel, current series ($pkgver)"
+  pkgdesc="The BigLinux kernel, current series ($pkgver)"
   depends=($(_each_series ""))
 }
 
 _package-headers() {
-  pkgdesc="Headers for the BigCommunity kernel, current series ($pkgver)"
+  pkgdesc="Headers for the BigLinux kernel, current series ($pkgver)"
   depends=($(_each_series -headers))
 }
 
 _package_module() {
-  pkgdesc="The $1 module for the BigCommunity kernel, current series ($pkgver)"
+  pkgdesc="The $1 module for the BigLinux kernel, current series ($pkgver)"
   depends=($(_each_series "-$1"))
 }
 

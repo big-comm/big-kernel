@@ -1,12 +1,12 @@
 # Maintainer: Tales A. Mendonça <talesam@gmail.com>
 #
-# linux-big73: the BigCommunity kernel, 7.3 series.
+# linux-big73: the BigLinux kernel, 7.3 series.
 #
 # kernel.org sources, Manjaro's configuration and hardware patches, and on top:
 #   - the BORE scheduler (Masahito Suzuki, firelzrd/bore-scheduler)
 #   - the ADIOS I/O scheduler (Masahito Suzuki, firelzrd/adios)
 #   - the POC idle CPU selector (Masahito Suzuki, firelzrd/poc-selector)
-#   - BigCommunity's Intel Xe fixes, sent upstream
+#   - BigLinux's Intel Xe fixes, sent upstream
 #   - a Clang/LLVM build with ThinLTO, ready for AutoFDO
 #
 # Everything the kernel changes is listed in prepare(), where it is also
@@ -104,7 +104,7 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         0005-zone-fix-6.15-rename-del_timer-to-timer_delete.patch
         0001-steam-deck.patch
         0000-iwlwifi-fix.patch
-        # BigCommunity: Intel display and Xe fixes
+        # BigLinux: Intel display and Xe fixes
         0001-drm-i915-vrr-Check-TRANS_PUSH_SEND-after-DSB-commit.patch
         0002-drm-xe-mcr-Wait-for-steering-semaphore-before-lock.patch
         0003-drm-xe-mcr-Sanitize-steer-semaphore-on-resume.patch
@@ -113,20 +113,20 @@ source=(https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_basekernel}.tar.xz
         0200-sched-bore-7.0.1.patch
         0201-block-adios-3.3.0r2.patch
         0202-sched-poc-selector-v3.0.0.patch
-        # BigCommunity: Wa_22016122933 series, reviewed upstream (v6)
+        # BigLinux: Wa_22016122933 series, reviewed upstream (v6)
         0101-drm-xe-Capture-devcoredump-on-TLB-invalidation-timeo.patch
         0102-drm-xe-Log-when-a-timed-out-TLB-invalidation-ack-fin.patch
         0103-drm-xe-Implement-Wa_22016122933.patch
         # Follow-up to 0103 by Navon John Lukose: map those buffers WC on the CPU
         # (as i915 does), not UC. UC cost ~3 s at boot and ~2.5 s on every resume.
         0104-drm-xe-Map-Wa_22016122933-buffers-WC-on-the-CPU-side.patch
-        # BigCommunity: lock down in Secure Boot mode, as Fedora, Ubuntu and
+        # BigLinux: lock down in Secure Boot mode, as Fedora, Ubuntu and
         # Debian do (../secureboot/sign.sh, big-secureboot)
         0300-efi-lock-down-the-kernel-in-Secure-Boot-mode.patch
 )
 sha256sums=('87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953'
             '4ebf04f150a2cfd11a435b3fbb1be1f2026dab1b42dc5921e4d86e8c4b23a72d'
-            '518f0b048228d12b56dac6c932e6e5207b15fef402924611bc7e523995d2eeae'
+            '22446eb6189abd2f84b75d239a50ea55026c9869dae5c083a934e8706dd259a6'
             '36b420493e2467b99d7fa0d08cf9dfcd53c635f7fde249a0dbdd5b5db8c8bf62'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
             '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
@@ -183,7 +183,7 @@ _llvm=(LLVM=1 LLVM_IAS=1)
 # still built with CONFIG_AUTOFDO_CLANG, ready to be profiled.
 _autofdo_profile=
 
-export KBUILD_BUILD_HOST=bigcommunity
+export KBUILD_BUILD_HOST=biglinux
 export KBUILD_BUILD_USER=$pkgbase
 export KBUILD_BUILD_TIMESTAMP="$(date -Ru${SOURCE_DATE_EPOCH:+d @$SOURCE_DATE_EPOCH})"
 
@@ -288,7 +288,7 @@ check() {
 }
 
 _package() {
-  pkgdesc="The BigCommunity kernel and modules: BORE, ADIOS, POC, Clang ThinLTO and Intel Xe fixes"
+  pkgdesc="The BigLinux kernel and modules: BORE, ADIOS, POC, Clang ThinLTO and Intel Xe fixes"
   depends=(
     'coreutils'
     'initramfs'
@@ -337,7 +337,7 @@ _package() {
 }
 
 _package-headers() {
-  pkgdesc="Headers and scripts for building modules for the BigCommunity kernel"
+  pkgdesc="Headers and scripts for building modules for the BigLinux kernel"
   # Modules for this kernel have to be built with the same Clang/LLVM.
   depends=(
     binutils

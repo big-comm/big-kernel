@@ -1,15 +1,15 @@
 <p align="center">
-  <img src=".github/assets/banner.png" alt="linux-big — the BigCommunity kernel" width="100%">
+  <img src=".github/assets/banner.png" alt="linux-big — the BigLinux kernel" width="100%">
 </p>
 
-# linux-big — the BigCommunity kernel
+# linux-big — the BigLinux kernel
 
-**linux-big** is the kernel of [BigCommunity](https://communitybig.org). It is
+**linux-big** is the kernel of [BigLinux](https://www.biglinux.com.br). It is
 built from the official [kernel.org](https://www.kernel.org) sources, keeps the
-configuration and hardware patches of the Manjaro kernel BigCommunity already
+configuration and hardware patches of the Manjaro kernel BigLinux already
 ships, and adds what can only be gained at compile time: a desktop-oriented CPU
 scheduler, a faster idle CPU selector, an adaptive I/O scheduler, a Clang/LLVM
-ThinLTO build ready for profile-guided optimisation, and BigCommunity's own
+ThinLTO build ready for profile-guided optimisation, and BigLinux's own
 fixes for Intel graphics.
 
 The goal is simple: a kernel that feels faster under load, whether you are
@@ -46,12 +46,12 @@ gaming or not, on the hardware our users actually have.
 | | Where it comes from |
 |---|---|
 | **Kernel source** | [kernel.org](https://www.kernel.org), stable series, verified by checksum |
-| **Base configuration** | the Manjaro kernel configuration used by BigCommunity |
+| **Base configuration** | the Manjaro kernel configuration used by BigLinux |
 | **Hardware patches** | Manjaro's set: AMD GPU and display fixes, Realtek audio, Intel Wi-Fi, handhelds |
 | **BORE CPU scheduler** | [firelzrd/bore-scheduler](https://github.com/firelzrd/bore-scheduler), by Masahito Suzuki |
 | **POC idle CPU selector** | [firelzrd/poc-selector](https://github.com/firelzrd/poc-selector), by Masahito Suzuki |
 | **ADIOS I/O scheduler** | [firelzrd/adios](https://github.com/firelzrd/adios), by Masahito Suzuki |
-| **Intel Xe / i915 fixes** | BigCommunity, sent upstream and reviewed on the kernel mailing lists |
+| **Intel Xe / i915 fixes** | BigLinux, sent upstream and reviewed on the kernel mailing lists |
 | **Compiler** | Clang/LLVM with ThinLTO and AutoFDO support |
 
 ### BORE — responsiveness under load
@@ -103,7 +103,7 @@ Profile-guided optimisation is where the measurable gain is.
 
 ### Intel Xe fixes — for Arrow Lake and Meteor Lake
 
-BigCommunity found and fixed a bug on Intel Arrow Lake / Meteor Lake graphics:
+BigLinux found and fixed a bug on Intel Arrow Lake / Meteor Lake graphics:
 on the media GT, the CPU could read stale data the graphics firmware had
 already written, which showed up as **TLB invalidation stalls of ~2.3 s** and,
 on some machines, as freezes under video workloads. The fix implements
@@ -147,7 +147,7 @@ Each series has its own patches, in its directory —
 [`linux-big73/`](linux-big73), [`linux-big72/`](linux-big72) — applied in the
 order its PKGBUILD lists them. The tables describe the current series, 7.3.
 
-**BigCommunity — Intel graphics**
+**BigLinux — Intel graphics**
 
 | Patch | What it does |
 |---|---|
@@ -184,7 +184,7 @@ your current kernel — it does not replace it.
 sudo pacman -S linux-big linux-big-headers
 ```
 
-`linux-big` brings the series BigCommunity recommends — 7.2 today — and keeps
+`linux-big` brings the series BigLinux recommends — 7.2 today — and keeps
 following it: when the next one is approved, the update installs it next to
 the one you have. A series still in testing is installed by name, and goes
 next to the one you have:
@@ -324,7 +324,7 @@ series being there. After that:
 ## NVIDIA and other kernel modules
 
 Like the Manjaro kernels, linux-big has prebuilt modules, named
-`<kernel>-<module>` (`linux-big73-nvidia-open` and so on). On BigCommunity they
+`<kernel>-<module>` (`linux-big73-nvidia-open` and so on). On BigLinux they
 are chosen and installed by
 [big-driver-manager-cli](https://github.com/biglinux/big-driver-manager-cli),
 which replaced mhwd: on the live system (`big-driver-manager-live.service`), in the
@@ -418,11 +418,11 @@ needed; an explicit `LLVM=` on the command line still overrides it.
 
 ## Secure Boot and anti-cheat
 
-The kernel image and every module package are signed with the BigCommunity
-Secure Boot key (`secureboot/sign.sh`; the certificate is
-`secureboot/bigcommunity-secureboot-2026.crt`). The CI provides the key to
-this repository's builds only (big-comm/build-package,
-`scripts/secureboot-key.sh`). A build without the key, a local one for
+The kernel image and every module package are signed with the BigLinux
+Secure Boot key (`secureboot/sign.sh`; the certificate, which keeps its name
+"BigCommunity Secure Boot 2026", is `secureboot/bigcommunity-secureboot-2026.crt`).
+The CI provides the key to this repository's builds only
+(big-comm/build-package, `scripts/secureboot-key.sh`). A build without the key, a local one for
 example, signs nothing. With Secure Boot off the signature is ignored and
 nothing changes. `.github/scripts/test_secureboot.py` fails if a series or a
 module package stops signing.
@@ -441,7 +441,7 @@ sudo big-secureboot disable   # take it out of the boot (turn Secure Boot off fi
 The package brings:
 
 - Fedora's shim, signed by Microsoft with both the 2011 and the 2023 CA.
-- A GRUB signed with the BigCommunity key, with every module built in.
+- A GRUB signed with the BigLinux key, with every module built in.
 - The certificate, which the user enrolls as a MOK.
 - What Easy Anti-Cheat Linux v2 checks besides Secure Boot: kexec off
   (`/usr/lib/sysctl.d/90-big-secureboot.conf`) and the Intel IOMMU on
@@ -460,7 +460,7 @@ Booted with Secure Boot, linux-big locks itself down to integrity mode
 Only signed modules load then: the packaged ones (`linux-bigNN-nvidia*`, …)
 are signed, while a module built locally by DKMS is not. Hibernation is not
 available either. With Secure Boot off nothing changes. Under Secure Boot,
-only linux-big boots, since it is the kernel signed with the BigCommunity key.
+only linux-big boots, since it is the kernel signed with the BigLinux key.
 
 ---
 
@@ -567,7 +567,7 @@ big-kernel/
 - [ ] **linux-big-lts** — the 6.18 long-term series, as a conservative fallback
 - [x] The 15 kernel modules Manjaro builds for its kernels, kept in step automatically
 - [x] New releases of the kernel series picked up, checked and built for testing automatically
-- [ ] Selectable in the BigCommunity ISO builder
+- [ ] Selectable in the BigLinux ISO builder
 - [ ] **AutoFDO profile** from real gaming and desktop workloads, shipped in the package
 - [ ] **Propeller** on top of AutoFDO
 - [ ] Published benchmarks: scheduler latency, frame times and build times, side by side with other kernels on the same hardware

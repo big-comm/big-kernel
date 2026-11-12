@@ -774,9 +774,9 @@
      letter-spacing="3"
      id="text56">x86_64</text>
   <!-- text -->
-  <text x="580" y="170" font-family="Inter" font-weight="700" font-size="20" fill="#a884ff" letter-spacing="6">BIGCOMMUNITY</text>
+  <text x="580" y="170" font-family="Inter" font-weight="700" font-size="20" fill="#a884ff" letter-spacing="6">BIGLINUX</text>
   <text x="574" y="270" font-family="Inter Display" font-weight="800" font-size="112" fill="url(#brand)">linux-big</text>
-  <text x="580" y="322" font-family="Inter" font-weight="500" font-size="32" fill="#e6e8f5">The BigCommunity kernel</text>
+  <text x="580" y="322" font-family="Inter" font-weight="500" font-size="32" fill="#e6e8f5">The BigLinux kernel</text>
   <text x="580" y="364" font-family="Inter" font-weight="400" font-size="24" fill="#9aa3c7">Tuned for gaming, fast for everyone.</text>
   <!-- what makes it different -->
   <g font-family="Inter" font-weight="600" font-size="19" fill="#e6e8f5">
