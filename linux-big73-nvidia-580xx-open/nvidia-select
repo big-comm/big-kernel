@@ -1,0 +1,70 @@
+#!/bin/bash
+#
+# <kernel>-nvidia-select PACKAGE [--remove]
+#
+# A linux-big NVIDIA module package (linux-big73-nvidia, say) carries one
+# build per NVIDIA driver in use by the Manjaro branches -- stable and
+# testing -- under /usr/lib/modules/<kernel>/extramodules/PACKAGE/<driver>/.
+# Only the build of the installed nvidia-utils can load, so this points
+# depmod at it with an override in /etc/depmod.d/PACKAGE.conf, then refreshes
+# the module index and, when the choice changed and the initramfs carries the
+# NVIDIA modules, the initramfs. (A new build of the package regenerates the
+# initramfs by itself: mkinitcpio's hook watches extramodules.)
+#
+# The override names the kernel release, not "*": linux-big72-nvidia and
+# linux-big73-nvidia are installed side by side, and each speaks only for
+# its own kernel.
+#
+# Run by the package's pacman hooks: after the package or nvidia-utils is
+# installed or upgraded, and with --remove before the package is removed.
+
+set -u
+
+package=${1:?usage: <kernel>-nvidia-select PACKAGE [--remove]}
+conf=/etc/depmod.d/$package.conf
+
+if [[ ${2:-} == --remove ]]; then
+  rm -f "$conf"
+  exit 0
+fi
+
+before=$(cat "$conf" 2>/dev/null)
+driver=$(LC_ALL=C pacman -Q nvidia-utils 2>/dev/null | awk '{ sub(/-[^-]*$/, "", $2); print $2 }')
+
+builds=()
+for build in /usr/lib/modules/*-big/extramodules/"$package"/"$driver"; do
+  [[ -n $driver && -d $build ]] && builds+=("$build")
+done
+
+if ((${#builds[@]})); then
+  {
+    echo "# Written by $package's pacman hook: the build for nvidia-utils $driver."
+    for build in "${builds[@]}"; do
+      release=${build#/usr/lib/modules/}
+      release=${release%%/*}
+      for module in "$build"/*.ko*; do
+        module=${module##*/}
+        echo "override ${module%%.ko*} $release extramodules/$package/$driver"
+      done
+    done
+  } > "$conf"
+else
+  rm -f "$conf"
+  echo "==> WARNING: $package has no build for nvidia-utils ${driver:-(not installed)};"
+  echo "    the NVIDIA driver will not load until $package is updated."
+fi
+
+for kernel in /usr/lib/modules/*-big; do
+  [[ -e $kernel/modules.order ]] && depmod "${kernel##*/}"
+done
+
+if [[ $(cat "$conf" 2>/dev/null) != "$before" ]] &&
+   grep -Eqs '^[[:space:]]*MODULES[+]?=.*nvidia' /etc/mkinitcpio.conf /etc/mkinitcpio.conf.d/*.conf; then
+  for kernel in /usr/lib/modules/*-big; do
+    [[ -d $kernel/extramodules/$package ]] || continue
+    preset=$(cat "$kernel/pkgbase" 2>/dev/null)
+    [[ -n $preset && -e /etc/mkinitcpio.d/$preset.preset ]] && mkinitcpio -p "$preset"
+  done
+fi
+
+exit 0

@@ -40,7 +40,7 @@ source ../secureboot/sign.sh
 _shimver=16.1-7
 
 pkgname=big-secureboot
-pkgver=1.1.2
+pkgver=1.1.3
 pkgrel=1
 pkgdesc="Secure Boot for BigCommunity, set up as Easy Anti-Cheat requires: shim, a signed GRUB and the BigCommunity key"
 arch=('x86_64')

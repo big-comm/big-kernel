@@ -393,9 +393,10 @@ of Manjaro is followed too. Both branches follow the drivers of Manjaro
 
 Which NVIDIA driver a machine has is decided by its Manjaro branch, not by
 BigCommunity's. So while Manjaro testing has a newer NVIDIA driver than stable,
-the `nvidia-open` and `nvidia` modules carry a build for each — the version
-names both, stable's first, as in `610.57.04+615.71.09` — and a pacman hook
-points the system at the build of the installed `nvidia-utils`, through
+the `nvidia-open`, `nvidia`, `nvidia-580xx-open` and `nvidia-580xx` modules
+carry a build for each — the version names both, stable's first, as in
+`610.57.04+615.71.09` — and a pacman hook points the system at the build of
+the installed `nvidia-utils` (or `nvidia-580xx-utils`), through
 `/etc/depmod.d/linux-bigNN-nvidia*.conf`, one per series, each for its own
 kernel only. Moving between Manjaro branches
 switches the build by itself; nothing is compiled on the user's machine. Once
