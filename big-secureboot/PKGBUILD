@@ -1,6 +1,6 @@
 # Maintainer: Tales A. Mendonça <talesam@gmail.com>
 #
-# big-secureboot: Secure Boot for BigCommunity, set up as Easy Anti-Cheat
+# big-secureboot: Secure Boot for BigLinux, set up as Easy Anti-Cheat
 # Linux v2 requires.
 #
 # Optional, and nothing depends on it: it is only installed to be used, so
@@ -8,9 +8,9 @@
 # big-secureboot.install. It brings:
 #   - shim, Fedora's build, signed by Microsoft (both the 2011 and the 2023
 #     UEFI CAs), so it boots wherever Secure Boot is on, old and new machines;
-#   - a GRUB signed with the BigCommunity key, with every module it needs
+#   - a GRUB signed with the BigLinux key, with every module it needs
 #     built in: under Secure Boot GRUB loads no module from disk;
-#   - the BigCommunity certificate, which the user enrolls as a MOK, and
+#   - the BigLinux certificate, which the user enrolls as a MOK, and
 #     with it shim trusts that GRUB and linux-big, signed with the same key
 #     (../secureboot/sign.sh);
 #   - big-secureboot, which installs all that in its own ESP directory and
@@ -40,9 +40,9 @@ source ../secureboot/sign.sh
 _shimver=16.1-7
 
 pkgname=big-secureboot
-pkgver=1.1.3
+pkgver=1.1.4
 pkgrel=1
-pkgdesc="Secure Boot for BigCommunity, set up as Easy Anti-Cheat requires: shim, a signed GRUB and the BigCommunity key"
+pkgdesc="Secure Boot for BigLinux, set up as Easy Anti-Cheat requires: shim, a signed GRUB and the BigLinux key"
 arch=('x86_64')
 url="https://github.com/big-comm/big-kernel"
 license=('GPL-3.0-or-later' 'BSD-2-Clause')

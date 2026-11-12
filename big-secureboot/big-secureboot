@@ -1,5 +1,5 @@
 #!/bin/bash
-# big-secureboot: Secure Boot for BigCommunity, with the BigCommunity key.
+# big-secureboot: Secure Boot for BigLinux, with the BigLinux key.
 #
 #   big-secureboot enable [--password PW]      install it and schedule the key
 #                                              (the package install runs it)
@@ -11,7 +11,7 @@
 #                                              again (the package upgrade)
 #
 # The boot chain is Fedora's shim (signed by Microsoft) -> a GRUB signed with
-# the BigCommunity key -> linux-big, also signed with it. They live in their
+# the BigLinux key -> linux-big, also signed with it. They live in their
 # own ESP directory, \EFI\big-secureboot, with their own firmware boot entry:
 # the grub package's hooks reinstall \EFI\<distributor>\grubx64.efi on every
 # update and would overwrite anything kept there. That GRUB reads the usual
@@ -37,7 +37,10 @@ set -euo pipefail
 
 SHARE=/usr/share/big-secureboot
 ESP_DIR=EFI/big-secureboot
-LABEL="BigCommunity Secure Boot"
+LABEL="BigLinux Secure Boot"
+# The entry's name up to 1.1.3. Still recognised, so "enable" replaces it
+# instead of adding a second entry, and "disable" and "status" find it.
+OLD_LABEL="BigCommunity Secure Boot"
 LOADER='\EFI\big-secureboot\shimx64.efi'
 CERT=$SHARE/big-secureboot.der
 DEFAULT_PASSWORD=big
@@ -94,7 +97,7 @@ install_loaders() {
   write_stub "$dir/grub.cfg.new" && mv "$dir/grub.cfg.new" "$dir/grub.cfg"
 }
 
-boot_entries() { efibootmgr 2>/dev/null | sed -n "s/^Boot\([0-9A-Fa-f]\{4\}\)\*\? $LABEL\b.*/\1/p"; }
+boot_entries() { efibootmgr 2>/dev/null | sed -n "s/^Boot\([0-9A-Fa-f]\{4\}\)\*\? \($LABEL\|$OLD_LABEL\)\b.*/\1/p"; }
 
 create_boot_entry() {
   local esp src disk part n
@@ -177,7 +180,7 @@ Turn on \"Allow Microsoft 3rd Party UEFI CA\" in the firmware settings, then run
     local free
     free=$(nvram_free)
     if [[ -n $free ]] && (( free < NVRAM_NEEDED )); then
-      die "the firmware has $((free / 1024)) KiB free for its variables, not enough for the BigCommunity key ($((NVRAM_NEEDED / 1024)) KiB).
+      die "the firmware has $((free / 1024)) KiB free for its variables, not enough for the BigLinux key ($((NVRAM_NEEDED / 1024)) KiB).
 Old crash dumps kept by the firmware usually fill it: ls /sys/firmware/efi/efivars/dump-*"
     fi
   fi
@@ -188,7 +191,7 @@ Old crash dumps kept by the firmware usually fill it: ls /sys/firmware/efi/efiva
   sysctl -q -p /usr/lib/sysctl.d/90-big-secureboot.conf || true
   say "Boot loaders installed in $(find_esp)/$ESP_DIR, boot entry \"$LABEL\" created."
   if key_enrolled; then
-    say "The BigCommunity key is already enrolled."
+    say "The BigLinux key is already enrolled."
   else
     # A key already pending keeps the password of its request: mokutil skips
     # it ("already in the enrollment request") and exits 0, and the password
@@ -233,7 +236,7 @@ cmd_disable() {
     for n in $(boot_entries); do efibootmgr -q -b "$n" -B; done
     esp=$(find_esp) && rm -rf -- "${esp:?}/$ESP_DIR"
   fi
-  say "BigCommunity Secure Boot taken out of the boot."
+  say "BigLinux Secure Boot taken out of the boot."
   if mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'; then
     say "Warning: Secure Boot is on. Turn it off in the firmware settings before restarting,"
     say "or the system may not start."
@@ -256,9 +259,9 @@ cmd_status() {
   else
     say "  [?]     boot loaders in the ESP and boot entry (run it with sudo to check)"
   fi
-  if key_enrolled; then check "BigCommunity key enrolled" true
-  elif key_pending; then check "BigCommunity key enrolled (pending: confirm it on the blue screen when restarting)" false
-  else check "BigCommunity key enrolled" false; fi
+  if key_enrolled; then check "BigLinux key enrolled" true
+  elif key_pending; then check "BigLinux key enrolled (pending: confirm it on the blue screen when restarting)" false
+  else check "BigLinux key enrolled" false; fi
   say "Easy Anti-Cheat requirements:"
   check "Secure Boot on" "mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'"
   check "TPM 2.0" "[[ \$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null) == 2 ]]"

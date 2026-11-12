@@ -96,7 +96,7 @@ class RealPkgbuild(unittest.TestCase):
         new = bump.drop_patch(REAL_PKGBUILD, name)
         self.assertEqual(bump.source_entries(new), entries[:index] + entries[index + 1 :])
         self.assertEqual(bump.checksums(new), sums[:index] + sums[index + 1 :])
-        self.assertIn("# BigCommunity: Intel display and Xe fixes", new)
+        self.assertIn("# BigLinux: Intel display and Xe fixes", new)
 
 
 class Failure(unittest.TestCase):
