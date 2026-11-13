@@ -81,6 +81,9 @@ write_stub() {
   fi
   cat > "$target" <<EOF
 # Written by big-secureboot: finds /boot/grub and loads its grub.cfg.
+# Under Secure Boot GRUB reads no font from disk; the themes' fonts come in
+# its image, so the menu's theme finds them by name.
+for font in (memdisk)/fonts/*.pf2; do loadfont "\$font"; done
 ${crypto}search --no-floppy --fs-uuid --set=root $uuid
 set prefix=(\$root)$relpath
 configfile \$prefix/grub.cfg

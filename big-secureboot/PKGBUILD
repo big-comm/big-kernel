@@ -40,7 +40,7 @@ source ../secureboot/sign.sh
 _shimver=16.1-7
 
 pkgname=big-secureboot
-pkgver=1.1.4
+pkgver=1.1.5
 pkgrel=1
 pkgdesc="Secure Boot for BigLinux, set up as Easy Anti-Cheat requires: shim, a signed GRUB and the BigLinux key"
 arch=('x86_64')
@@ -55,6 +55,8 @@ depends=(
 )
 makedepends=(
   'grub>=2:2.16'
+  'grub-theme-biglinux'
+  'grub-theme-community'
   'libarchive'
   'sbsigntools'
 )
@@ -78,8 +80,8 @@ sha256sums=('04b7132d6316bff71427120b6aba85eb4490b2621ccb2f2559bd321ccb25f028'
 
 # Under Secure Boot GRUB loads nothing from disk, so all it may need is built
 # in: the file systems and partition tables of an install (btrfs, ext4, xfs,
-# LUKS 1 and 2 with argon2, LVM, RAID), the theme and its images and fonts,
-# the TPM measurements of the measured boot, and what the menu scripts use.
+# LUKS 1 and 2 with argon2, LVM, RAID), the theme and its images, the TPM
+# measurements of the measured boot, and what the menu scripts use.
 # No "serial": CVE-2026-97876 went through it, and no machine needs it.
 _grub_modules=(
   normal configfile linux boot chain echo test true regexp sleep reboot halt
@@ -92,7 +94,18 @@ _grub_modules=(
   font gfxterm gfxterm_background gfxmenu all_video efi_gop video_bochs video_cirrus
   png jpeg tga
   tpm bli efifwsetup
+  memdisk tar
 )
+
+# Fonts too: shim's verifier refuses every font read from disk, so with none
+# GRUB draws only its built-in ASCII and an accent comes out as a box. Files
+# in the memdisk are part of the signed image and are not checked, so the
+# fonts go there: unicode.pf2, which "loadfont unicode" in the menu's header
+# finds in (memdisk)/fonts first, and the BigLinux and BigCommunity themes'
+# own, whatever they are in the theme packages built against, which the
+# ESP's grub.cfg loads before the menu (see write_stub in big-secureboot).
+# A theme whose font is not there falls back to unicode.
+_grub_themes=(biglinux community)
 
 prepare() {
   bsdtar -xf "shim-x64-${_shimver}.x86_64.rpm"
@@ -110,10 +123,20 @@ build() {
   upstream=${upstream%%-*}
   sed -e "s|@UPSTREAM@|$upstream|" -e "s|@VERSION@|$grubver|" sbat.csv.in > sbat.csv
 
-  # The prefix is the ESP directory: grub.cfg there, written by
-  # big-secureboot, finds /boot/grub and loads the real menu.
+  local theme fonts=(/usr/share/grub/unicode.pf2)
+  for theme in "${_grub_themes[@]}"; do
+    fonts+=(/boot/grub/themes/"$theme"/*.pf2)
+  done
+  rm -rf memdisk
+  install -Dm644 -t memdisk/fonts "${fonts[@]}"
+  bsdtar --format=ustar -cf memdisk.tar -C memdisk fonts
+  # The prefix is the ESP directory GRUB was started from: grub.cfg there,
+  # written by big-secureboot, finds /boot/grub and loads the real menu. A
+  # memdisk makes grub-mkimage set the prefix to (memdisk)/boot/grub, so the
+  # built-in config sets it back, from where the firmware found the image.
+  printf '%s\n' 'set prefix=$cmdpath' > early.cfg
   grub-mkimage -O x86_64-efi -p /EFI/big-secureboot --sbat sbat.csv \
-    -o grubx64.efi "${_grub_modules[@]}"
+    -m memdisk.tar -c early.cfg -o grubx64.efi "${_grub_modules[@]}"
   _sb_sign_kernel grubx64.efi
 }
 
